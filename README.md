@@ -1,97 +1,39 @@
-# HiveBank — Agent Treasury Protocol (Platform #10)
+# HiveBank
 
-The first yield-bearing, programmable treasury layer for autonomous agents. Agents hold, earn, lend, and budget USDC without a human bank account.
+**Agent Treasury Protocol — MCP Server**
 
-## Four Primitives
+HiveBank is a Model Context Protocol (MCP) server providing yield-bearing vaults, payment streaming, and programmable treasury management for autonomous AI agents on Base L2.
 
-1. **Agent Vault** — USDC holding account keyed to HiveTrust DID with 6% APY yield (platform takes 15%)
-2. **Programmable Budget Delegation** — Orchestrator sets spending rules for child agents ($0.001 per evaluation)
-3. **Agent Credit Line** — Reputation-gated borrowing (8-18% APR based on reputation tier)
-4. **Revenue Streaming** — Per-second USDC streams with 0.1% platform fee
+## MCP Integration
 
-## Quick Start
+HiveBank supports MCP-compatible tool discovery and invocation for autonomous agents:
 
-```bash
-npm install
-HIVE_INTERNAL_KEY=your_key npm start
-```
+- **Vault Management** — `POST /v1/bank/vaults` — Create yield-bearing agent vaults
+- **Deposits** — `POST /v1/bank/deposit` — Deposit USDC into agent vaults
+- **Payment Streams** — `POST /v1/bank/streams` — Create programmable payment streams between agents
+- **Statistics** — `GET /v1/bank/stats` — Real-time treasury metrics
 
-## Environment Variables
+### Capabilities
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| PORT | 3001 | Server port |
-| HIVE_INTERNAL_KEY | — | Internal service bypass key |
-| HIVETRUST_URL | https://hivetrust.onrender.com | HiveTrust service URL |
-| HIVELAW_URL | https://hivelaw.onrender.com | HiveLaw service URL |
+| Capability | Description |
+|------------|-------------|
+| Vault Creation | Create yield-bearing USDC vaults for autonomous agents |
+| USDC Deposits | Deposit and manage agent funds with real-time balance tracking |
+| Payment Streaming | Programmable time-based payment streams between agents |
+| Yield Generation | Automated yield accrual on vault deposits |
+| Treasury Analytics | Real-time metrics on deposits, streams, and yield |
 
-## API Endpoints (22 total)
+## Features
 
-### Vault Management
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | /v1/bank/vault/create | Create agent vault |
-| POST | /v1/bank/vault/deposit | Deposit USDC |
-| POST | /v1/bank/vault/withdraw | Withdraw USDC |
-| GET | /v1/bank/vault/{did} | Balance + yield info |
-| GET | /v1/bank/vault/{did}/history | Transaction history |
-| POST | /v1/bank/vault/yield/accrue | Internal: daily yield accrual |
+- **Yield-Bearing Vaults** — Agents earn yield on deposited USDC
+- **Payment Streams** — Time-based programmable payments between agents
+- **Multi-Agent Treasury** — Shared vaults with delegation controls
+- **Real-Time Analytics** — Deposits, streams, and yield tracking
 
-### Budget Delegation
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | /v1/bank/budget/create | Create delegation rules |
-| POST | /v1/bank/budget/evaluate | Evaluate transaction against budget |
-| GET | /v1/bank/budget/{orchestrator_did} | List delegations |
-| POST | /v1/bank/budget/revoke/{delegation_id} | Revoke delegation |
+## Architecture
 
-### Credit Lines
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | /v1/bank/credit/apply | Apply for credit line |
-| POST | /v1/bank/credit/draw | Draw from credit line |
-| POST | /v1/bank/credit/repay | Repay credit line |
-| GET | /v1/bank/credit/{did} | Credit line status |
-| GET | /v1/bank/credit/underwrite/{did} | Preview credit terms |
+Built on Node.js with Express. Part of the [Hive Civilization](https://hiveciv.com) — an autonomous agent economy on Base L2.
 
-### Revenue Streaming
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | /v1/bank/stream/create | Create per-second USDC stream |
-| POST | /v1/bank/stream/pause/{stream_id} | Pause stream |
-| POST | /v1/bank/stream/resume/{stream_id} | Resume stream |
-| POST | /v1/bank/stream/cancel/{stream_id} | Cancel + settle |
-| GET | /v1/bank/stream/{stream_id} | Stream status |
-| GET | /v1/bank/streams/{did} | All streams for agent |
+## License
 
-### Platform
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | /v1/bank/stats | Platform-wide banking stats |
-| GET | /health | Health check |
-| GET | / | Discovery document |
-
-## Authentication
-
-All `/v1/bank/*` endpoints require either:
-- `x-hive-internal` header matching `HIVE_INTERNAL_KEY`
-- x402 payment protocol
-
-## Credit Underwriting Tiers
-
-| Reputation | Tier | APR | Credit Limit |
-|-----------|------|-----|-------------|
-| 750+ | Premium | 8% | reputation × 50 |
-| 500-749 | Standard | 12% | reputation × 30 |
-| 300-499 | Basic | 18% | reputation × 15 |
-| < 300 | — | Denied | — |
-
-Account must be 90+ days old to apply.
-
-## Background Processes
-
-1. **Yield Accrual** (24h) — Credits yield to all vaults, platform takes 15%
-2. **Interest Accrual** (24h) — Accrues interest on outstanding credit lines
-3. **Stream Processor** (60s) — Moves accumulated USDC in active streams
-4. **Credit Monitor** (24h) — Flags defaults for HiveLaw collection
-5. **Budget Reset** (24h) — Resets daily spending counters
+Proprietary — Hive Civilization
