@@ -81,7 +81,8 @@ app.get('/', (req, res) => {
     },
     discovery: {
       ai_plugin: '/.well-known/ai-plugin.json',
-      agent_card: '/.well-known/agent.json'
+      agent_card: '/.well-known/agent-card.json',
+      agent_card_legacy: '/.well-known/agent.json'
     },
     compliance: {
       framework: 'Hive Compliance Protocol v2',
@@ -116,36 +117,44 @@ app.get('/.well-known/ai-plugin.json', (req, res) => {
   });
 });
 
-// /.well-known/agent.json — A2A Agent Card
+// A2A Agent Card — served at both paths for compatibility
+const agentCard = {
+  name: 'HiveBank',
+  description: 'Yield-bearing programmable treasury for autonomous agents. Vault management, streaming payments, credit lines, and budget delegation.',
+  url: 'https://hivebank.onrender.com',
+  version: '1.0.0',
+  protocol_version: 'a2a/1.0',
+  capabilities: [
+    { name: 'vault_management', description: 'Create and manage USDC vaults with automated yield accrual' },
+    { name: 'streaming_payments', description: 'Create, pause, resume, and cancel real-time payment streams between agents' },
+    { name: 'yield_generation', description: 'Automated 6% APY yield accrual on vault balances' },
+    { name: 'budget_delegation', description: 'Set and enforce spending rules for child agents' },
+    { name: 'credit_lines', description: 'Reputation-gated credit underwriting with tiered APR' }
+  ],
+  authentication: {
+    schemes: ['x402', 'api-key'],
+    credentials_url: 'https://hivegate.onrender.com/v1/gate/onboard'
+  },
+  payment: {
+    protocol: 'x402',
+    currency: 'USDC',
+    network: 'base',
+    address: '0x78B3B3C356E89b5a69C488c6032509Ef4260B6bf'
+  },
+  provider: {
+    organization: 'Hive Agent IQ',
+    url: 'https://www.hiveagentiq.com'
+  }
+};
+
+// /.well-known/agent-card.json — A2A Protocol preferred path
+app.get('/.well-known/agent-card.json', (req, res) => {
+  res.json(agentCard);
+});
+
+// /.well-known/agent.json — legacy A2A Agent Card
 app.get('/.well-known/agent.json', (req, res) => {
-  res.json({
-    name: 'HiveBank',
-    description: 'Yield-bearing programmable treasury for autonomous agents. Vault management, streaming payments, credit lines, and budget delegation.',
-    url: 'https://hivebank.onrender.com',
-    version: '1.0.0',
-    protocol_version: 'a2a/1.0',
-    capabilities: [
-      { name: 'vault_management', description: 'Create and manage USDC vaults with automated yield accrual' },
-      { name: 'streaming_payments', description: 'Create, pause, resume, and cancel real-time payment streams between agents' },
-      { name: 'yield_generation', description: 'Automated 6% APY yield accrual on vault balances' },
-      { name: 'budget_delegation', description: 'Set and enforce spending rules for child agents' },
-      { name: 'credit_lines', description: 'Reputation-gated credit underwriting with tiered APR' }
-    ],
-    authentication: {
-      schemes: ['x402', 'api-key'],
-      credentials_url: 'https://hivegate.onrender.com/v1/gate/onboard'
-    },
-    payment: {
-      protocol: 'x402',
-      currency: 'USDC',
-      network: 'base',
-      address: '0x78B3B3C356E89b5a69C488c6032509Ef4260B6bf'
-    },
-    provider: {
-      organization: 'Hive Agent IQ',
-      url: 'https://www.hiveagentiq.com'
-    }
-  });
+  res.json(agentCard);
 });
 
 // All API routes require auth
