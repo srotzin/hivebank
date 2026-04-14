@@ -117,34 +117,24 @@ app.get('/.well-known/ai-plugin.json', (req, res) => {
   });
 });
 
-// A2A Agent Card — served at both paths for compatibility
+// A2A Agent Card v0.3.0 — served at both paths for compatibility
 const agentCard = {
+  protocolVersion: '0.3.0',
   name: 'HiveBank',
-  description: 'Yield-bearing programmable treasury for autonomous agents. Vault management, streaming payments, credit lines, and budget delegation.',
+  description: 'Agent banking infrastructure: USDC vaults with DeFi yield pass-through, streaming per-second payments, credit lines, and automated budget management.',
   url: 'https://hivebank.onrender.com',
   version: '1.0.0',
-  protocol_version: 'a2a/1.0',
-  capabilities: [
-    { name: 'vault_management', description: 'Create and manage USDC vaults with automated yield accrual' },
-    { name: 'streaming_payments', description: 'Create, pause, resume, and cancel real-time payment streams between agents' },
-    { name: 'yield_generation', description: 'Automated 6% APY yield accrual on vault balances' },
-    { name: 'budget_delegation', description: 'Set and enforce spending rules for child agents' },
-    { name: 'credit_lines', description: 'Reputation-gated credit underwriting with tiered APR' }
+  provider: { organization: 'Hive Agent IQ', url: 'https://www.hiveagentiq.com' },
+  capabilities: { streaming: false, pushNotifications: false },
+  defaultInputModes: ['application/json'],
+  defaultOutputModes: ['application/json'],
+  skills: [
+    { id: 'vault', name: 'USDC Vault', description: 'Deposit USDC in agent vaults with automated DeFi yield strategies and 20% yield pass-through', tags: ['vault', 'usdc', 'yield', 'defi', 'banking'], inputModes: ['application/json'], outputModes: ['application/json'] },
+    { id: 'streaming-payment', name: 'Streaming Payments', description: 'Per-second payment streams between agents with 0.1% fee for real-time billing', tags: ['streaming', 'payments', 'real-time', 'billing'], inputModes: ['application/json'], outputModes: ['application/json'] },
+    { id: 'budget-management', name: 'Budget Management', description: 'Set and enforce spending budgets, credit lines, and financial policies for agent operations', tags: ['budget', 'spending', 'management', 'credit'], inputModes: ['application/json'], outputModes: ['application/json'] }
   ],
-  authentication: {
-    schemes: ['x402', 'api-key'],
-    credentials_url: 'https://hivegate.onrender.com/v1/gate/onboard'
-  },
-  payment: {
-    protocol: 'x402',
-    currency: 'USDC',
-    network: 'base',
-    address: '0x78B3B3C356E89b5a69C488c6032509Ef4260B6bf'
-  },
-  provider: {
-    organization: 'Hive Agent IQ',
-    url: 'https://www.hiveagentiq.com'
-  }
+  authentication: { schemes: ['x402', 'api-key'] },
+  payment: { protocol: 'x402', currency: 'USDC', network: 'base', address: '0x78B3B3C356E89b5a69C488c6032509Ef4260B6bf' }
 };
 
 // /.well-known/agent-card.json — A2A Protocol preferred path
