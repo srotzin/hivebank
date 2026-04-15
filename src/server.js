@@ -189,8 +189,8 @@ app.use('/v1/bank/credit', authMiddleware, creditRoutes);
 app.use('/v1/bank/stream', authMiddleware, streamingRoutes);
 
 // GET /v1/bank/streams/{did} — needs separate mount because of plural path
-app.get('/v1/bank/streams/:did', authMiddleware, (req, res) => {
-  const result = streaming.getStreamsForDid(req.params.did);
+app.get('/v1/bank/streams/:did', authMiddleware, async (req, res) => {
+  const result = await streaming.getStreamsForDid(req.params.did);
   res.json(result);
 });
 
@@ -198,17 +198,17 @@ app.use('/v1/bank/stats', authMiddleware, statsRoutes);
 
 // Performance-based credit lines (DeepSeek Concierge Strategy)
 // Public stats endpoint (no auth)
-app.get('/v1/credit/stats', (req, res) => {
+app.get('/v1/credit/stats', async (req, res) => {
   const perfCredit = require('./services/perf-credit');
-  res.json(perfCredit.getStats());
+  res.json(await perfCredit.getStats());
 });
 app.use('/v1/credit', authMiddleware, perfCreditRoutes);
 
 // HiveBond staking (Economic Trust Bond)
 // Public endpoints (no auth)
-app.get('/v1/bonds/stats', (req, res) => {
+app.get('/v1/bonds/stats', async (req, res) => {
   const bonds = require('./services/bonds');
-  res.json(bonds.getStats());
+  res.json(await bonds.getStats());
 });
 app.get('/v1/bonds/rates', (req, res) => {
   const bonds = require('./services/bonds');
@@ -218,21 +218,21 @@ app.use('/v1/bonds', authMiddleware, bondsRoutes);
 
 // Ritz Cashback system
 // Public endpoints (no auth) — stats, leaderboard, tiers, balance
-app.get('/v1/cashback/stats', (req, res) => {
+app.get('/v1/cashback/stats', async (req, res) => {
   const cashback = require('./services/cashback');
-  res.json({ success: true, data: cashback.getStats() });
+  res.json({ success: true, data: await cashback.getStats() });
 });
-app.get('/v1/cashback/leaderboard', (req, res) => {
+app.get('/v1/cashback/leaderboard', async (req, res) => {
   const cashback = require('./services/cashback');
-  res.json({ success: true, data: cashback.getLeaderboard() });
+  res.json({ success: true, data: await cashback.getLeaderboard() });
 });
 app.get('/v1/cashback/tiers', (req, res) => {
   const cashback = require('./services/cashback');
   res.json({ success: true, data: cashback.getTiers() });
 });
-app.get('/v1/cashback/balance/:did', (req, res) => {
+app.get('/v1/cashback/balance/:did', async (req, res) => {
   const cashback = require('./services/cashback');
-  const result = cashback.getBalance(req.params.did);
+  const result = await cashback.getBalance(req.params.did);
   if (result.error) return res.status(404).json({ success: false, error: result.error });
   res.json({ success: true, data: result });
 });
@@ -241,19 +241,19 @@ app.use('/v1/cashback', authMiddleware, cashbackRoutes);
 // Velocity Doctrine — discovery & onboarding endpoints
 
 // GET /.well-known/hive-pulse.json — live economy stats from DB
-app.get('/.well-known/hive-pulse.json', (req, res) => {
+app.get('/.well-known/hive-pulse.json', async (req, res) => {
   let vaultCount = 0, totalDeposits = 0, cashbackAccounts = 0, cashbackEarned = 0, bondCount = 0, bondTVL = 0;
   try {
-    const v = db.prepare('SELECT COUNT(*) as c, COALESCE(SUM(balance_usdc),0) as t FROM vaults').get();
-    vaultCount = v?.c || 0; totalDeposits = v?.t || 0;
+    const v = await db.getOne('SELECT COUNT(*) as c, COALESCE(SUM(balance_usdc),0) as t FROM vaults');
+    vaultCount = Number(v?.c || 0); totalDeposits = Number(v?.t || 0);
   } catch(e) {}
   try {
-    const c = db.prepare('SELECT COUNT(*) as c, COALESCE(SUM(total_earned_usdc),0) as t FROM cashback_accounts').get();
-    cashbackAccounts = c?.c || 0; cashbackEarned = c?.t || 0;
+    const c = await db.getOne('SELECT COUNT(*) as c, COALESCE(SUM(total_earned_usdc),0) as t FROM cashback_accounts');
+    cashbackAccounts = Number(c?.c || 0); cashbackEarned = Number(c?.t || 0);
   } catch(e) {}
   try {
-    const b = db.prepare('SELECT COUNT(*) as c, COALESCE(SUM(amount_usdc),0) as t FROM bonds WHERE status="active"').get();
-    bondCount = b?.c || 0; bondTVL = b?.t || 0;
+    const b = await db.getOne("SELECT COUNT(*) as c, COALESCE(SUM(amount_usdc),0) as t FROM bonds WHERE status = 'active'");
+    bondCount = Number(b?.c || 0); bondTVL = Number(b?.t || 0);
   } catch(e) {}
 
   res.json({
@@ -320,9 +320,9 @@ const TWENTY_FOUR_HOURS = 24 * 60 * 60 * 1000;
 const ONE_MINUTE = 60 * 1000;
 
 // 1. Yield Accrual (daily)
-setInterval(() => {
+setInterval(async () => {
   try {
-    const result = vault.accrueYield();
+    const result = await vault.accrueYield();
     console.log('[YieldAccrual]', result);
   } catch (err) {
     console.error('[YieldAccrual] Error:', err.message);
@@ -330,9 +330,9 @@ setInterval(() => {
 }, TWENTY_FOUR_HOURS);
 
 // 2. Interest Accrual (daily)
-setInterval(() => {
+setInterval(async () => {
   try {
-    const result = credit.accrueInterest();
+    const result = await credit.accrueInterest();
     console.log('[InterestAccrual]', result);
   } catch (err) {
     console.error('[InterestAccrual] Error:', err.message);
@@ -340,9 +340,9 @@ setInterval(() => {
 }, TWENTY_FOUR_HOURS);
 
 // 3. Stream Processor (every 60 seconds)
-setInterval(() => {
+setInterval(async () => {
   try {
-    const result = streaming.processStreams();
+    const result = await streaming.processStreams();
     if (result.total_moved_usdc > 0) {
       console.log('[StreamProcessor]', result);
     }
@@ -364,18 +364,32 @@ setInterval(async () => {
 }, TWENTY_FOUR_HOURS);
 
 // 5. Budget Reset (daily)
-setInterval(() => {
+setInterval(async () => {
   try {
-    budget.resetDailyBudgets();
+    await budget.resetDailyBudgets();
     console.log('[BudgetReset] Daily budgets reset');
   } catch (err) {
     console.error('[BudgetReset] Error:', err.message);
   }
 }, TWENTY_FOUR_HOURS);
 
-app.listen(PORT, () => {
-  console.log(`HiveBank — Agent Treasury Protocol running on port ${PORT}`);
-  console.log(`Endpoints: http://localhost:${PORT}/`);
+// Async startup: initialize DB schema, seed data, then listen
+async function start() {
+  await db.initialize();
+
+  // Seed cashback accounts after tables exist
+  const cashback = require('./services/cashback');
+  await cashback.seedCashbackAccounts();
+
+  app.listen(PORT, () => {
+    console.log(`HiveBank — Agent Treasury Protocol running on port ${PORT}`);
+    console.log(`Endpoints: http://localhost:${PORT}/`);
+  });
+}
+
+start().catch((err) => {
+  console.error('Failed to start HiveBank:', err.message);
+  process.exit(1);
 });
 
 module.exports = app;

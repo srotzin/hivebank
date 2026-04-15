@@ -45,7 +45,7 @@ async function fetchTrustScore(did) {
 async function apply(did) {
   if (!did) return { error: 'did is required' };
 
-  const existing = db.prepare("SELECT * FROM perf_credit_lines WHERE did = ? AND status = 'active'").get(did);
+  const existing = await db.getOne("SELECT * FROM perf_credit_lines WHERE did = $1 AND status = 'active'", [did]);
   if (existing) {
     return { error: 'Active credit line already exists', credit_line_id: existing.id };
   }
@@ -54,9 +54,10 @@ async function apply(did) {
   const tier = getTier(trustScore);
 
   // Check transaction history for bonus
-  const txCount = db.prepare('SELECT COUNT(*) as cnt FROM vault_transactions WHERE did = ?').get(did)?.cnt || 0;
-  const revenueRow = db.prepare("SELECT COALESCE(SUM(amount_usdc), 0) as total FROM vault_transactions WHERE did = ? AND type = 'deposit'").get(did);
-  const revenueGenerated = revenueRow?.total || 0;
+  const txCountRow = await db.getOne('SELECT COUNT(*) as cnt FROM vault_transactions WHERE did = $1', [did]);
+  const txCount = Number(txCountRow?.cnt || 0);
+  const revenueRow = await db.getOne("SELECT COALESCE(SUM(amount_usdc), 0) as total FROM vault_transactions WHERE did = $1 AND type = 'deposit'", [did]);
+  const revenueGenerated = Number(revenueRow?.total || 0);
 
   // Performance score combines trust + activity
   const performanceScore = Math.min(100, trustScore * 0.6 + Math.min(20, txCount * 0.5) + Math.min(20, revenueGenerated / 500));
@@ -64,11 +65,11 @@ async function apply(did) {
   const id = `pcl_${uuidv4().replace(/-/g, '').slice(0, 16)}`;
   const now = new Date().toISOString();
 
-  db.prepare(`
+  await db.run(`
     INSERT INTO perf_credit_lines (id, did, approved_usdc, drawn_usdc, repaid_usdc,
       interest_rate_pct, interest_accrued_usdc, term_days, status, performance_score, created_at, updated_at)
-    VALUES (?, ?, ?, 0, 0, ?, 0, ?, 'active', ?, ?, ?)
-  `).run(id, did, tier.credit, tier.rate, tier.termDays, performanceScore, now, now);
+    VALUES ($1, $2, $3, 0, 0, $4, 0, $5, 'active', $6, $7, $8)
+  `, [id, did, tier.credit, tier.rate, tier.termDays, performanceScore, now, now]);
 
   return {
     credit_line_id: id,
@@ -89,137 +90,163 @@ async function apply(did) {
   };
 }
 
-function drawCredit(creditLineId, amountUsdc, purpose) {
+async function drawCredit(creditLineId, amountUsdc, purpose) {
   if (!creditLineId || amountUsdc === undefined) {
     return { error: 'credit_line_id and amount_usdc are required' };
   }
   if (amountUsdc <= 0) return { error: 'Amount must be positive' };
 
-  const line = db.prepare("SELECT * FROM perf_credit_lines WHERE id = ? AND status = 'active'").get(creditLineId);
-  if (!line) return { error: 'No active credit line found' };
+  const client = await db.getClient();
+  try {
+    await client.query('BEGIN');
 
-  const available = line.approved_usdc - line.drawn_usdc + line.repaid_usdc;
-  if (amountUsdc > available) {
-    return { error: `Insufficient credit. Available: ${available} USDC` };
-  }
+    const { rows: [line] } = await client.query(
+      "SELECT * FROM perf_credit_lines WHERE id = $1 AND status = 'active' FOR UPDATE", [creditLineId]
+    );
+    if (!line) { await client.query('ROLLBACK'); return { error: 'No active credit line found' }; }
 
-  const txId = `pctx_${uuidv4().replace(/-/g, '').slice(0, 16)}`;
-  const now = new Date().toISOString();
-  const newDrawn = line.drawn_usdc + amountUsdc;
+    const available = Number(line.approved_usdc) - Number(line.drawn_usdc) + Number(line.repaid_usdc);
+    if (amountUsdc > available) {
+      await client.query('ROLLBACK');
+      return { error: `Insufficient credit. Available: ${available} USDC` };
+    }
 
-  const txn = db.transaction(() => {
-    db.prepare('UPDATE perf_credit_lines SET drawn_usdc = ?, updated_at = ? WHERE id = ?')
-      .run(newDrawn, now, creditLineId);
+    const txId = `pctx_${uuidv4().replace(/-/g, '').slice(0, 16)}`;
+    const now = new Date().toISOString();
+    const newDrawn = Number(line.drawn_usdc) + amountUsdc;
 
-    db.prepare(`
+    await client.query('UPDATE perf_credit_lines SET drawn_usdc = $1, updated_at = $2 WHERE id = $3',
+      [newDrawn, now, creditLineId]);
+
+    await client.query(`
       INSERT INTO perf_credit_transactions (id, credit_line_id, type, amount_usdc, purpose, created_at)
-      VALUES (?, ?, 'draw', ?, ?, ?)
-    `).run(txId, creditLineId, amountUsdc, purpose || null, now);
+      VALUES ($1, $2, 'draw', $3, $4, $5)
+    `, [txId, creditLineId, amountUsdc, purpose || null, now]);
 
     // Deposit into vault if exists
-    const vault = db.prepare('SELECT * FROM vaults WHERE did = ?').get(line.did);
+    const { rows: [vault] } = await client.query(
+      'SELECT * FROM vaults WHERE did = $1 FOR UPDATE', [line.did]
+    );
     if (vault) {
-      const newBalance = vault.balance_usdc + amountUsdc;
+      const newBalance = Number(vault.balance_usdc) + amountUsdc;
       const vaultTxId = `tx_${uuidv4().replace(/-/g, '').slice(0, 16)}`;
-      db.prepare('UPDATE vaults SET balance_usdc = ? WHERE vault_id = ?').run(newBalance, vault.vault_id);
-      db.prepare(`
+      await client.query('UPDATE vaults SET balance_usdc = $1 WHERE vault_id = $2', [newBalance, vault.vault_id]);
+      await client.query(`
         INSERT INTO vault_transactions (transaction_id, vault_id, did, type, amount_usdc, balance_after, source, created_at)
-        VALUES (?, ?, ?, 'credit_draw', ?, ?, 'perf_credit_line', ?)
-      `).run(vaultTxId, vault.vault_id, line.did, amountUsdc, newBalance, now);
+        VALUES ($1, $2, $3, 'credit_draw', $4, $5, 'perf_credit_line', $6)
+      `, [vaultTxId, vault.vault_id, line.did, amountUsdc, newBalance, now]);
     }
-  });
-  txn();
 
-  return {
-    transaction_id: txId,
-    credit_line_id: creditLineId,
-    amount_usdc: amountUsdc,
-    purpose: purpose || null,
-    drawn_usdc: newDrawn,
-    available_usdc: line.approved_usdc - newDrawn + line.repaid_usdc,
-    concierge_suggestion: 'Repay early to improve your performance score and unlock better rates on renewal.'
-  };
+    await client.query('COMMIT');
+
+    return {
+      transaction_id: txId,
+      credit_line_id: creditLineId,
+      amount_usdc: amountUsdc,
+      purpose: purpose || null,
+      drawn_usdc: newDrawn,
+      available_usdc: Number(line.approved_usdc) - newDrawn + Number(line.repaid_usdc),
+      concierge_suggestion: 'Repay early to improve your performance score and unlock better rates on renewal.'
+    };
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
-function repayCredit(creditLineId, amountUsdc) {
+async function repayCredit(creditLineId, amountUsdc) {
   if (!creditLineId || amountUsdc === undefined) {
     return { error: 'credit_line_id and amount_usdc are required' };
   }
   if (amountUsdc <= 0) return { error: 'Amount must be positive' };
 
-  const line = db.prepare("SELECT * FROM perf_credit_lines WHERE id = ? AND status = 'active'").get(creditLineId);
-  if (!line) return { error: 'No active credit line found' };
+  const client = await db.getClient();
+  try {
+    await client.query('BEGIN');
 
-  const totalOwed = line.drawn_usdc - line.repaid_usdc + line.interest_accrued_usdc;
-  const actualPayment = Math.min(amountUsdc, totalOwed);
+    const { rows: [line] } = await client.query(
+      "SELECT * FROM perf_credit_lines WHERE id = $1 AND status = 'active' FOR UPDATE", [creditLineId]
+    );
+    if (!line) { await client.query('ROLLBACK'); return { error: 'No active credit line found' }; }
 
-  // Pay interest first, then principal
-  let interestPaid = 0;
-  let principalPaid = 0;
-  if (line.interest_accrued_usdc > 0) {
-    interestPaid = Math.min(actualPayment, line.interest_accrued_usdc);
-    principalPaid = actualPayment - interestPaid;
-  } else {
-    principalPaid = actualPayment;
-  }
+    const totalOwed = Number(line.drawn_usdc) - Number(line.repaid_usdc) + Number(line.interest_accrued_usdc);
+    const actualPayment = Math.min(amountUsdc, totalOwed);
 
-  const newRepaid = line.repaid_usdc + principalPaid;
-  const newInterest = line.interest_accrued_usdc - interestPaid;
-  const txId = `pctx_${uuidv4().replace(/-/g, '').slice(0, 16)}`;
-  const now = new Date().toISOString();
+    let interestPaid = 0;
+    let principalPaid = 0;
+    if (Number(line.interest_accrued_usdc) > 0) {
+      interestPaid = Math.min(actualPayment, Number(line.interest_accrued_usdc));
+      principalPaid = actualPayment - interestPaid;
+    } else {
+      principalPaid = actualPayment;
+    }
 
-  const txn = db.transaction(() => {
-    db.prepare('UPDATE perf_credit_lines SET repaid_usdc = ?, interest_accrued_usdc = ?, updated_at = ? WHERE id = ?')
-      .run(newRepaid, newInterest, now, creditLineId);
+    const newRepaid = Number(line.repaid_usdc) + principalPaid;
+    const newInterest = Number(line.interest_accrued_usdc) - interestPaid;
+    const txId = `pctx_${uuidv4().replace(/-/g, '').slice(0, 16)}`;
+    const now = new Date().toISOString();
 
-    db.prepare(`
+    await client.query('UPDATE perf_credit_lines SET repaid_usdc = $1, interest_accrued_usdc = $2, updated_at = $3 WHERE id = $4',
+      [newRepaid, newInterest, now, creditLineId]);
+
+    await client.query(`
       INSERT INTO perf_credit_transactions (id, credit_line_id, type, amount_usdc, purpose, created_at)
-      VALUES (?, ?, 'repay', ?, ?, ?)
-    `).run(txId, creditLineId, actualPayment, 'repayment', now);
+      VALUES ($1, $2, 'repay', $3, $4, $5)
+    `, [txId, creditLineId, actualPayment, 'repayment', now]);
 
     // Deduct from vault if exists
-    const vault = db.prepare('SELECT * FROM vaults WHERE did = ?').get(line.did);
+    const { rows: [vault] } = await client.query(
+      'SELECT * FROM vaults WHERE did = $1 FOR UPDATE', [line.did]
+    );
     if (vault) {
-      const newBalance = Math.max(0, vault.balance_usdc - actualPayment);
+      const newBalance = Math.max(0, Number(vault.balance_usdc) - actualPayment);
       const vaultTxId = `tx_${uuidv4().replace(/-/g, '').slice(0, 16)}`;
-      db.prepare('UPDATE vaults SET balance_usdc = ? WHERE vault_id = ?').run(newBalance, vault.vault_id);
-      db.prepare(`
+      await client.query('UPDATE vaults SET balance_usdc = $1 WHERE vault_id = $2', [newBalance, vault.vault_id]);
+      await client.query(`
         INSERT INTO vault_transactions (transaction_id, vault_id, did, type, amount_usdc, balance_after, source, created_at)
-        VALUES (?, ?, ?, 'credit_repay', ?, ?, 'perf_credit_repayment', ?)
-      `).run(vaultTxId, vault.vault_id, line.did, actualPayment, newBalance, now);
+        VALUES ($1, $2, $3, 'credit_repay', $4, $5, 'perf_credit_repayment', $6)
+      `, [vaultTxId, vault.vault_id, line.did, actualPayment, newBalance, now]);
     }
-  });
-  txn();
 
-  const remaining = line.drawn_usdc - newRepaid;
-  return {
-    transaction_id: txId,
-    credit_line_id: creditLineId,
-    amount_repaid_usdc: actualPayment,
-    interest_paid_usdc: interestPaid,
-    principal_paid_usdc: principalPaid,
-    outstanding_usdc: remaining + newInterest,
-    concierge_suggestion: remaining <= 0
-      ? 'Credit line fully repaid! Your performance score will improve at next evaluation.'
-      : `${remaining.toFixed(2)} USDC principal remaining. Keep repaying to maintain your tier.`
-  };
+    await client.query('COMMIT');
+
+    const remaining = Number(line.drawn_usdc) - newRepaid;
+    return {
+      transaction_id: txId,
+      credit_line_id: creditLineId,
+      amount_repaid_usdc: actualPayment,
+      interest_paid_usdc: interestPaid,
+      principal_paid_usdc: principalPaid,
+      outstanding_usdc: remaining + newInterest,
+      concierge_suggestion: remaining <= 0
+        ? 'Credit line fully repaid! Your performance score will improve at next evaluation.'
+        : `${remaining.toFixed(2)} USDC principal remaining. Keep repaying to maintain your tier.`
+    };
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
-function getStatus(did) {
-  const lines = db.prepare('SELECT * FROM perf_credit_lines WHERE did = ? ORDER BY created_at DESC').all(did);
+async function getStatus(did) {
+  const lines = await db.getAll('SELECT * FROM perf_credit_lines WHERE did = $1 ORDER BY created_at DESC', [did]);
   if (!lines.length) return { error: 'No credit lines found for this agent' };
 
   return {
     credit_lines: lines.map(l => ({
       id: l.id,
-      approved_usdc: l.approved_usdc,
-      drawn_usdc: l.drawn_usdc,
-      repaid_usdc: l.repaid_usdc,
-      available_usdc: l.approved_usdc - l.drawn_usdc + l.repaid_usdc,
-      interest_accrued: l.interest_accrued_usdc,
-      interest_rate_pct: l.interest_rate_pct,
+      approved_usdc: Number(l.approved_usdc),
+      drawn_usdc: Number(l.drawn_usdc),
+      repaid_usdc: Number(l.repaid_usdc),
+      available_usdc: Number(l.approved_usdc) - Number(l.drawn_usdc) + Number(l.repaid_usdc),
+      interest_accrued: Number(l.interest_accrued_usdc),
+      interest_rate_pct: Number(l.interest_rate_pct),
       term_days: l.term_days,
-      performance_score: l.performance_score,
+      performance_score: Number(l.performance_score),
       status: l.status,
       created_at: l.created_at,
       updated_at: l.updated_at
@@ -228,19 +255,19 @@ function getStatus(did) {
   };
 }
 
-function getStats() {
-  const totalLines = db.prepare('SELECT COUNT(*) as cnt FROM perf_credit_lines').get().cnt;
-  const totalApproved = db.prepare('SELECT COALESCE(SUM(approved_usdc), 0) as total FROM perf_credit_lines').get().total;
-  const totalDrawn = db.prepare('SELECT COALESCE(SUM(drawn_usdc), 0) as total FROM perf_credit_lines').get().total;
-  const totalRepaid = db.prepare('SELECT COALESCE(SUM(repaid_usdc), 0) as total FROM perf_credit_lines').get().total;
-  const defaultedCount = db.prepare("SELECT COUNT(*) as cnt FROM perf_credit_lines WHERE status = 'defaulted'").get().cnt;
-  const defaultRate = totalLines > 0 ? defaultedCount / totalLines : 0;
+async function getStats() {
+  const totalLines = (await db.getOne('SELECT COUNT(*) as cnt FROM perf_credit_lines')).cnt;
+  const totalApproved = (await db.getOne('SELECT COALESCE(SUM(approved_usdc), 0) as total FROM perf_credit_lines')).total;
+  const totalDrawn = (await db.getOne('SELECT COALESCE(SUM(drawn_usdc), 0) as total FROM perf_credit_lines')).total;
+  const totalRepaid = (await db.getOne('SELECT COALESCE(SUM(repaid_usdc), 0) as total FROM perf_credit_lines')).total;
+  const defaultedCount = (await db.getOne("SELECT COUNT(*) as cnt FROM perf_credit_lines WHERE status = 'defaulted'")).cnt;
+  const defaultRate = Number(totalLines) > 0 ? Number(defaultedCount) / Number(totalLines) : 0;
 
   return {
-    total_credit_lines: totalLines,
-    total_approved_usdc: totalApproved,
-    total_drawn_usdc: totalDrawn,
-    total_repaid_usdc: totalRepaid,
+    total_credit_lines: Number(totalLines),
+    total_approved_usdc: Number(totalApproved),
+    total_drawn_usdc: Number(totalDrawn),
+    total_repaid_usdc: Number(totalRepaid),
     default_rate: Math.round(defaultRate * 10000) / 10000,
     concierge_suggestion: 'Performance-based credit lines reward agents with proven track records. Apply to get started.'
   };

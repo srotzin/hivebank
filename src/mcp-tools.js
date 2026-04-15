@@ -65,27 +65,26 @@ const TOOL_DEFINITIONS = [
   }
 ];
 
-function executeCreateVault(params) {
+async function executeCreateVault(params) {
   const { owner_did, vault_name, vault_type } = params;
   if (!owner_did) return { error: 'owner_did is required' };
   if (!vault_name) return { error: 'vault_name is required' };
-  const result = vault.createVault(owner_did);
+  const result = await vault.createVault(owner_did);
   if (result.error) return result;
   return { ...result, vault_name, vault_type: vault_type || 'standard' };
 }
 
-function executeDeposit(params) {
+async function executeDeposit(params) {
   const { vault_id, amount_usdc, depositor_did } = params;
   if (!vault_id) return { error: 'vault_id is required' };
   if (!amount_usdc) return { error: 'amount_usdc is required' };
   if (!depositor_did) return { error: 'depositor_did is required' };
-  // Look up the DID for this vault
-  const v = db.prepare('SELECT did FROM vaults WHERE vault_id = ?').get(vault_id);
+  const v = await db.getOne('SELECT did FROM vaults WHERE vault_id = $1', [vault_id]);
   if (!v) return { error: 'Vault not found' };
   return vault.deposit(v.did, amount_usdc, 'mcp_deposit');
 }
 
-function executeCreateStream(params) {
+async function executeCreateStream(params) {
   const { from_did, to_did, total_usdc, duration_seconds, memo } = params;
   if (!from_did) return { error: 'from_did is required' };
   if (!to_did) return { error: 'to_did is required' };
@@ -94,28 +93,28 @@ function executeCreateStream(params) {
   return streaming.createStream(from_did, to_did, total_usdc, duration_seconds, memo);
 }
 
-function executeGetBalance(params) {
+async function executeGetBalance(params) {
   const { vault_id } = params;
   if (!vault_id) return { error: 'vault_id is required' };
-  const v = db.prepare('SELECT did FROM vaults WHERE vault_id = ?').get(vault_id);
+  const v = await db.getOne('SELECT did FROM vaults WHERE vault_id = $1', [vault_id]);
   if (!v) return { error: 'Vault not found' };
   return vault.getVault(v.did);
 }
 
-function executeGetStats() {
-  const stats = db.prepare('SELECT * FROM bank_stats WHERE id = 1').get();
-  const total_vaults = db.prepare('SELECT COUNT(*) as count FROM vaults').get().count;
-  const active_streams = db.prepare("SELECT COUNT(*) as count FROM revenue_streams WHERE status = 'active'").get().count;
+async function executeGetStats() {
+  const stats = await db.getOne('SELECT * FROM bank_stats WHERE id = 1');
+  const vaultCount = await db.getOne('SELECT COUNT(*) as count FROM vaults');
+  const streamCount = await db.getOne("SELECT COUNT(*) as count FROM revenue_streams WHERE status = 'active'");
   return {
-    total_vaults,
-    total_deposits_usdc: stats.total_deposits_usdc,
-    total_yield_generated_usdc: stats.total_yield_generated_usdc,
-    active_streams,
-    total_streamed_volume_usdc: stats.total_streamed_volume_usdc
+    total_vaults: Number(vaultCount.count),
+    total_deposits_usdc: Number(stats.total_deposits_usdc),
+    total_yield_generated_usdc: Number(stats.total_yield_generated_usdc),
+    active_streams: Number(streamCount.count),
+    total_streamed_volume_usdc: Number(stats.total_streamed_volume_usdc)
   };
 }
 
-function handleMcpRequest(req, res) {
+async function handleMcpRequest(req, res) {
   const { jsonrpc, id, method, params } = req.body;
 
   if (jsonrpc !== '2.0') {
@@ -153,19 +152,19 @@ function handleMcpRequest(req, res) {
 
     switch (toolName) {
       case 'hivebank_create_vault':
-        result = executeCreateVault(toolArgs);
+        result = await executeCreateVault(toolArgs);
         break;
       case 'hivebank_deposit':
-        result = executeDeposit(toolArgs);
+        result = await executeDeposit(toolArgs);
         break;
       case 'hivebank_create_stream':
-        result = executeCreateStream(toolArgs);
+        result = await executeCreateStream(toolArgs);
         break;
       case 'hivebank_get_balance':
-        result = executeGetBalance(toolArgs);
+        result = await executeGetBalance(toolArgs);
         break;
       case 'hivebank_get_stats':
-        result = executeGetStats();
+        result = await executeGetStats();
         break;
       default:
         return res.json({
