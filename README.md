@@ -1,38 +1,56 @@
-# HiveBank
+# HiveBank — Agent Treasury Protocol — MCP Server
 
-**Agent Treasury Protocol — MCP Server**
+HiveBank is an MCP server that provides yield-bearing vaults, payment streaming, and treasury management for autonomous AI agents.
 
-HiveBank is a Model Context Protocol (MCP) server providing yield-bearing vaults, payment streaming, and programmable treasury management for autonomous AI agents on Base L2.
+## MCP Endpoint
 
-## MCP Integration
+```
+POST /mcp
+```
 
-HiveBank supports MCP-compatible tool discovery and invocation for autonomous agents:
+JSON-RPC 2.0 over HTTP. Supports `initialize`, `tools/list`, and `tools/call`.
 
-- **Vault Management** — `POST /v1/bank/vaults` — Create yield-bearing agent vaults
-- **Deposits** — `POST /v1/bank/deposit` — Deposit USDC into agent vaults
-- **Payment Streams** — `POST /v1/bank/streams` — Create programmable payment streams between agents
-- **Statistics** — `GET /v1/bank/stats` — Real-time treasury metrics
+## MCP Tools
 
-### Capabilities
+| Tool | Description | Required Parameters |
+|------|-------------|-------------------|
+| `hivebank_create_vault` | Create a yield-bearing USDC vault for an agent | `owner_did`, `vault_name` |
+| `hivebank_deposit` | Deposit USDC into a vault | `vault_id`, `amount_usdc`, `depositor_did` |
+| `hivebank_create_stream` | Create a programmable payment stream | `from_did`, `to_did`, `total_usdc`, `duration_seconds` |
+| `hivebank_get_balance` | Get vault balance and yield info | `vault_id` |
+| `hivebank_get_stats` | Get treasury-wide stats | _(none)_ |
 
-| Capability | Description |
-|------------|-------------|
-| Vault Creation | Create yield-bearing USDC vaults for autonomous agents |
-| USDC Deposits | Deposit and manage agent funds with real-time balance tracking |
-| Payment Streaming | Programmable time-based payment streams between agents |
-| Yield Generation | Automated yield accrual on vault deposits |
-| Treasury Analytics | Real-time metrics on deposits, streams, and yield |
+## Usage
 
-## Features
+```bash
+# Initialize
+curl -X POST https://hivebank.onrender.com/mcp \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize"}'
 
-- **Yield-Bearing Vaults** — Agents earn yield on deposited USDC
-- **Payment Streams** — Time-based programmable payments between agents
-- **Multi-Agent Treasury** — Shared vaults with delegation controls
-- **Real-Time Analytics** — Deposits, streams, and yield tracking
+# List tools
+curl -X POST https://hivebank.onrender.com/mcp \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
+
+# Call a tool
+curl -X POST https://hivebank.onrender.com/mcp \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"hivebank_get_stats","arguments":{}}}'
+```
+
+## Running Locally
+
+```bash
+npm install
+npm start
+```
+
+Server starts on port 3001 (or `PORT` env var). Health check at `GET /health`.
 
 ## Architecture
 
-Built on Node.js with Express. Part of the [Hive Civilization](https://hiveciv.com) — an autonomous agent economy on Base L2.
+Node.js + Express + SQLite. Yield accrual, stream processing, and credit monitoring run as background tasks.
 
 ## License
 

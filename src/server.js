@@ -6,6 +6,7 @@ const budgetRoutes = require('./routes/budget');
 const creditRoutes = require('./routes/credit');
 const streamingRoutes = require('./routes/streaming');
 const statsRoutes = require('./routes/stats');
+const { handleMcpRequest } = require('./mcp-tools');
 const streaming = require('./services/streaming');
 const vault = require('./services/vault');
 const credit = require('./services/credit');
@@ -146,6 +147,9 @@ app.get('/.well-known/agent-card.json', (req, res) => {
 app.get('/.well-known/agent.json', (req, res) => {
   res.json(agentCard);
 });
+
+// MCP JSON-RPC endpoint — no auth (protocol handles its own negotiation)
+app.post('/mcp', express.json(), handleMcpRequest);
 
 // All API routes require auth
 app.use('/v1/bank/vault', authMiddleware, vaultRoutes);
