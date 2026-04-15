@@ -13,6 +13,10 @@ router.get('/', (req, res) => {
     "SELECT COUNT(*) as count FROM budget_evaluations WHERE evaluated_at >= ?"
   ).get(today + 'T00:00:00.000Z').count;
 
+  const active_reinvestors = db.prepare(
+    "SELECT COUNT(*) as count FROM vaults WHERE reinvest_enabled = 1"
+  ).get().count;
+
   res.json({
     total_vaults,
     total_deposits_usdc: stats.total_deposits_usdc,
@@ -22,7 +26,9 @@ router.get('/', (req, res) => {
     total_credit_outstanding_usdc: stats.total_credit_outstanding_usdc,
     active_streams,
     total_streamed_volume_usdc: stats.total_streamed_volume_usdc,
-    budget_evaluations_today: evals_today
+    budget_evaluations_today: evals_today,
+    total_reinvested_usdc: stats.total_reinvested_usdc,
+    active_reinvestors
   });
 });
 

@@ -17,8 +17,20 @@ db.exec(`
     yield_earned_usdc REAL DEFAULT 0,
     platform_yield_fee_usdc REAL DEFAULT 0,
     yield_rate_apy REAL DEFAULT 0.06,
+    reinvest_pct REAL DEFAULT 0,
+    execution_budget REAL DEFAULT 0,
+    total_reinvested REAL DEFAULT 0,
+    reinvest_enabled INTEGER DEFAULT 0,
     created_at TEXT,
     last_yield_accrual TEXT
+  );
+
+  CREATE TABLE IF NOT EXISTS reinvestment_log (
+    id TEXT PRIMARY KEY,
+    vault_id TEXT NOT NULL,
+    amount REAL NOT NULL,
+    source_deposit_id TEXT,
+    created_at TEXT
   );
 
   CREATE TABLE IF NOT EXISTS vault_transactions (
@@ -111,6 +123,7 @@ db.exec(`
     total_credit_outstanding_usdc REAL DEFAULT 0,
     total_streamed_volume_usdc REAL DEFAULT 0,
     budget_evaluations_total INTEGER DEFAULT 0,
+    total_reinvested_usdc REAL DEFAULT 0,
     last_updated TEXT
   );
 
