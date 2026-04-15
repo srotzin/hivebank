@@ -160,7 +160,10 @@ db.exec(`
     balance_usdc REAL DEFAULT 0,
     total_earned_usdc REAL DEFAULT 0,
     total_spent_usdc REAL DEFAULT 0,
+    tier TEXT DEFAULT 'bronze',
     soul_fitness_boost INTEGER DEFAULT 0,
+    streak_days INTEGER DEFAULT 0,
+    last_active TEXT,
     created_at TEXT,
     updated_at TEXT
   );

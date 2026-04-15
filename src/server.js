@@ -86,11 +86,12 @@ app.get('/', (req, res) => {
         rates: { method: 'GET', path: '/v1/bonds/rates', description: 'Current staking rates and tiers' }
       },
       cashback: {
-        earn: { method: 'POST', path: '/v1/cashback/earn', description: 'Record cashback earned from paid API call (internal)' },
-        spend: { method: 'POST', path: '/v1/cashback/spend', description: 'Spend cashback credits (internal)' },
-        balance: { method: 'GET', path: '/v1/cashback/balance/{did}', description: 'Check cashback balance' },
+        earn: { method: 'POST', path: '/v1/cashback/earn', description: 'Record cashback earned from paid API call' },
+        spend: { method: 'POST', path: '/v1/cashback/spend', description: 'Spend cashback credits' },
+        balance: { method: 'GET', path: '/v1/cashback/balance/{did}', description: 'Check cashback balance and tier' },
         stats: { method: 'GET', path: '/v1/cashback/stats', description: 'Platform-wide cashback stats' },
-        leaderboard: { method: 'GET', path: '/v1/cashback/leaderboard', description: 'Top cashback earners' }
+        leaderboard: { method: 'GET', path: '/v1/cashback/leaderboard', description: 'Top cashback earners' },
+        tiers: { method: 'GET', path: '/v1/cashback/tiers', description: 'Tier definitions, thresholds, and bonus rates' }
       },
       health: { method: 'GET', path: '/health', description: 'Health check' }
     },
@@ -213,14 +214,24 @@ app.get('/v1/bonds/rates', (req, res) => {
 app.use('/v1/bonds', authMiddleware, bondsRoutes);
 
 // Ritz Cashback system
-// Public endpoints (no auth)
+// Public endpoints (no auth) — stats, leaderboard, tiers, balance
 app.get('/v1/cashback/stats', (req, res) => {
   const cashback = require('./services/cashback');
-  res.json(cashback.getStats());
+  res.json({ success: true, data: cashback.getStats() });
 });
 app.get('/v1/cashback/leaderboard', (req, res) => {
   const cashback = require('./services/cashback');
-  res.json(cashback.getLeaderboard());
+  res.json({ success: true, data: cashback.getLeaderboard() });
+});
+app.get('/v1/cashback/tiers', (req, res) => {
+  const cashback = require('./services/cashback');
+  res.json({ success: true, data: cashback.getTiers() });
+});
+app.get('/v1/cashback/balance/:did', (req, res) => {
+  const cashback = require('./services/cashback');
+  const result = cashback.getBalance(req.params.did);
+  if (result.error) return res.status(404).json({ success: false, error: result.error });
+  res.json({ success: true, data: result });
 });
 app.use('/v1/cashback', authMiddleware, cashbackRoutes);
 
