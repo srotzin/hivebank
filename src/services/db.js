@@ -115,6 +115,44 @@ db.exec(`
   );
 
   INSERT OR IGNORE INTO bank_stats (id) VALUES (1);
+
+  CREATE TABLE IF NOT EXISTS perf_credit_lines (
+    id TEXT PRIMARY KEY,
+    did TEXT NOT NULL,
+    approved_usdc REAL DEFAULT 0,
+    drawn_usdc REAL DEFAULT 0,
+    repaid_usdc REAL DEFAULT 0,
+    interest_rate_pct REAL,
+    interest_accrued_usdc REAL DEFAULT 0,
+    term_days INTEGER,
+    status TEXT DEFAULT 'active',
+    performance_score REAL,
+    created_at TEXT,
+    updated_at TEXT
+  );
+
+  CREATE TABLE IF NOT EXISTS perf_credit_transactions (
+    id TEXT PRIMARY KEY,
+    credit_line_id TEXT NOT NULL,
+    type TEXT NOT NULL,
+    amount_usdc REAL NOT NULL,
+    purpose TEXT,
+    created_at TEXT
+  );
+
+  CREATE TABLE IF NOT EXISTS bonds (
+    id TEXT PRIMARY KEY,
+    did TEXT NOT NULL,
+    amount_usdc REAL NOT NULL,
+    lock_period_days INTEGER NOT NULL,
+    apy_pct REAL NOT NULL,
+    yield_earned_usdc REAL DEFAULT 0,
+    staked_at TEXT,
+    maturity_date TEXT,
+    unstaked_at TEXT,
+    status TEXT DEFAULT 'active',
+    early_withdrawal_penalty_usdc REAL DEFAULT 0
+  );
 `);
 
 module.exports = db;

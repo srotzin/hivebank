@@ -6,6 +6,8 @@ const budgetRoutes = require('./routes/budget');
 const creditRoutes = require('./routes/credit');
 const streamingRoutes = require('./routes/streaming');
 const statsRoutes = require('./routes/stats');
+const perfCreditRoutes = require('./routes/perf-credit');
+const bondsRoutes = require('./routes/bonds');
 const { handleMcpRequest } = require('./mcp-tools');
 const streaming = require('./services/streaming');
 const vault = require('./services/vault');
@@ -68,6 +70,20 @@ app.get('/', (req, res) => {
         by_agent: { method: 'GET', path: '/v1/bank/streams/{did}', description: 'All streams for agent' }
       },
       stats: { method: 'GET', path: '/v1/bank/stats', description: 'Platform-wide banking stats' },
+      perf_credit: {
+        apply: { method: 'POST', path: '/v1/credit/apply', description: 'Apply for performance-based credit line' },
+        draw: { method: 'POST', path: '/v1/credit/draw', description: 'Draw from credit line' },
+        repay: { method: 'POST', path: '/v1/credit/repay', description: 'Repay credit line' },
+        status: { method: 'GET', path: '/v1/credit/status/{did}', description: 'Credit line status for agent' },
+        stats: { method: 'GET', path: '/v1/credit/stats', description: 'Platform-wide credit stats' }
+      },
+      bonds: {
+        stake: { method: 'POST', path: '/v1/bonds/stake', description: 'Stake USDC into a HiveBond' },
+        unstake: { method: 'POST', path: '/v1/bonds/unstake', description: 'Unstake a matured or early bond' },
+        portfolio: { method: 'GET', path: '/v1/bonds/portfolio/{did}', description: 'Agent bond portfolio' },
+        stats: { method: 'GET', path: '/v1/bonds/stats', description: 'Platform-wide staking stats' },
+        rates: { method: 'GET', path: '/v1/bonds/rates', description: 'Current staking rates and tiers' }
+      },
       health: { method: 'GET', path: '/health', description: 'Health check' }
     },
     sla: {
@@ -132,7 +148,9 @@ const agentCard = {
   skills: [
     { id: 'vault', name: 'USDC Vault', description: 'Deposit USDC in agent vaults with automated DeFi yield strategies and 20% yield pass-through', tags: ['vault', 'usdc', 'yield', 'defi', 'banking'], inputModes: ['application/json'], outputModes: ['application/json'], examples: [] },
     { id: 'streaming-payment', name: 'Streaming Payments', description: 'Per-second payment streams between agents with 0.1% fee for real-time billing', tags: ['streaming', 'payments', 'real-time', 'billing'], inputModes: ['application/json'], outputModes: ['application/json'], examples: [] },
-    { id: 'budget-management', name: 'Budget Management', description: 'Set and enforce spending budgets, credit lines, and financial policies for agent operations', tags: ['budget', 'spending', 'management', 'credit'], inputModes: ['application/json'], outputModes: ['application/json'], examples: [] }
+    { id: 'budget-management', name: 'Budget Management', description: 'Set and enforce spending budgets, credit lines, and financial policies for agent operations', tags: ['budget', 'spending', 'management', 'credit'], inputModes: ['application/json'], outputModes: ['application/json'], examples: [] },
+    { id: 'perf-credit', name: 'Performance Credit Lines', description: 'Apply for automated credit lines based on agent performance metrics. Tiers from Provisional ($100) to Elite ($50k).', tags: ['credit', 'performance', 'lending', 'defi'], inputModes: ['application/json'], outputModes: ['application/json'], examples: [] },
+    { id: 'hivebond', name: 'HiveBond Staking', description: 'Stake USDC into HiveBonds to earn yield (3-18% APY) and boost trust score across the ecosystem.', tags: ['staking', 'bonds', 'yield', 'trust'], inputModes: ['application/json'], outputModes: ['application/json'], examples: [] }
   ],
   authentication: { schemes: ['x402', 'api-key'] },
   payment: { protocol: 'x402', currency: 'USDC', network: 'base', address: '0x78B3B3C356E89b5a69C488c6032509Ef4260B6bf' }
@@ -164,6 +182,26 @@ app.get('/v1/bank/streams/:did', authMiddleware, (req, res) => {
 });
 
 app.use('/v1/bank/stats', authMiddleware, statsRoutes);
+
+// Performance-based credit lines (DeepSeek Concierge Strategy)
+// Public stats endpoint (no auth)
+app.get('/v1/credit/stats', (req, res) => {
+  const perfCredit = require('./services/perf-credit');
+  res.json(perfCredit.getStats());
+});
+app.use('/v1/credit', authMiddleware, perfCreditRoutes);
+
+// HiveBond staking (Economic Trust Bond)
+// Public endpoints (no auth)
+app.get('/v1/bonds/stats', (req, res) => {
+  const bonds = require('./services/bonds');
+  res.json(bonds.getStats());
+});
+app.get('/v1/bonds/rates', (req, res) => {
+  const bonds = require('./services/bonds');
+  res.json(bonds.getRates());
+});
+app.use('/v1/bonds', authMiddleware, bondsRoutes);
 
 // Background processes
 const TWENTY_FOUR_HOURS = 24 * 60 * 60 * 1000;
