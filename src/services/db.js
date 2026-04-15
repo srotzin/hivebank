@@ -153,6 +153,27 @@ db.exec(`
     status TEXT DEFAULT 'active',
     early_withdrawal_penalty_usdc REAL DEFAULT 0
   );
+
+  CREATE TABLE IF NOT EXISTS cashback_accounts (
+    id TEXT PRIMARY KEY,
+    did TEXT UNIQUE NOT NULL,
+    balance_usdc REAL DEFAULT 0,
+    total_earned_usdc REAL DEFAULT 0,
+    total_spent_usdc REAL DEFAULT 0,
+    soul_fitness_boost INTEGER DEFAULT 0,
+    created_at TEXT,
+    updated_at TEXT
+  );
+
+  CREATE TABLE IF NOT EXISTS cashback_transactions (
+    id TEXT PRIMARY KEY,
+    account_id TEXT NOT NULL,
+    type TEXT NOT NULL,
+    amount_usdc REAL NOT NULL,
+    source_service TEXT,
+    description TEXT,
+    created_at TEXT
+  );
 `);
 
 module.exports = db;

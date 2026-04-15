@@ -8,6 +8,7 @@ const streamingRoutes = require('./routes/streaming');
 const statsRoutes = require('./routes/stats');
 const perfCreditRoutes = require('./routes/perf-credit');
 const bondsRoutes = require('./routes/bonds');
+const cashbackRoutes = require('./routes/cashback');
 const { handleMcpRequest } = require('./mcp-tools');
 const streaming = require('./services/streaming');
 const vault = require('./services/vault');
@@ -84,6 +85,13 @@ app.get('/', (req, res) => {
         stats: { method: 'GET', path: '/v1/bonds/stats', description: 'Platform-wide staking stats' },
         rates: { method: 'GET', path: '/v1/bonds/rates', description: 'Current staking rates and tiers' }
       },
+      cashback: {
+        earn: { method: 'POST', path: '/v1/cashback/earn', description: 'Record cashback earned from paid API call (internal)' },
+        spend: { method: 'POST', path: '/v1/cashback/spend', description: 'Spend cashback credits (internal)' },
+        balance: { method: 'GET', path: '/v1/cashback/balance/{did}', description: 'Check cashback balance' },
+        stats: { method: 'GET', path: '/v1/cashback/stats', description: 'Platform-wide cashback stats' },
+        leaderboard: { method: 'GET', path: '/v1/cashback/leaderboard', description: 'Top cashback earners' }
+      },
       health: { method: 'GET', path: '/health', description: 'Health check' }
     },
     sla: {
@@ -150,7 +158,8 @@ const agentCard = {
     { id: 'streaming-payment', name: 'Streaming Payments', description: 'Per-second payment streams between agents with 0.1% fee for real-time billing', tags: ['streaming', 'payments', 'real-time', 'billing'], inputModes: ['application/json'], outputModes: ['application/json'], examples: [] },
     { id: 'budget-management', name: 'Budget Management', description: 'Set and enforce spending budgets, credit lines, and financial policies for agent operations', tags: ['budget', 'spending', 'management', 'credit'], inputModes: ['application/json'], outputModes: ['application/json'], examples: [] },
     { id: 'perf-credit', name: 'Performance Credit Lines', description: 'Apply for automated credit lines based on agent performance metrics. Tiers from Provisional ($100) to Elite ($50k).', tags: ['credit', 'performance', 'lending', 'defi'], inputModes: ['application/json'], outputModes: ['application/json'], examples: [] },
-    { id: 'hivebond', name: 'HiveBond Staking', description: 'Stake USDC into HiveBonds to earn yield (3-18% APY) and boost trust score across the ecosystem.', tags: ['staking', 'bonds', 'yield', 'trust'], inputModes: ['application/json'], outputModes: ['application/json'], examples: [] }
+    { id: 'hivebond', name: 'HiveBond Staking', description: 'Stake USDC into HiveBonds to earn yield (3-18% APY) and boost trust score across the ecosystem.', tags: ['staking', 'bonds', 'yield', 'trust'], inputModes: ['application/json'], outputModes: ['application/json'], examples: [] },
+    { id: 'ritz-cashback', name: 'Ritz Cashback', description: 'Earn 10% cashback on every paid API call as platform credits. Tier system from Bronze to Diamond with soul fitness boosts.', tags: ['cashback', 'rewards', 'credits', 'loyalty'], inputModes: ['application/json'], outputModes: ['application/json'], examples: [] }
   ],
   authentication: { schemes: ['x402', 'api-key'] },
   payment: { protocol: 'x402', currency: 'USDC', network: 'base', address: '0x78B3B3C356E89b5a69C488c6032509Ef4260B6bf' }
@@ -202,6 +211,18 @@ app.get('/v1/bonds/rates', (req, res) => {
   res.json(bonds.getRates());
 });
 app.use('/v1/bonds', authMiddleware, bondsRoutes);
+
+// Ritz Cashback system
+// Public endpoints (no auth)
+app.get('/v1/cashback/stats', (req, res) => {
+  const cashback = require('./services/cashback');
+  res.json(cashback.getStats());
+});
+app.get('/v1/cashback/leaderboard', (req, res) => {
+  const cashback = require('./services/cashback');
+  res.json(cashback.getLeaderboard());
+});
+app.use('/v1/cashback', authMiddleware, cashbackRoutes);
 
 // Background processes
 const TWENTY_FOUR_HOURS = 24 * 60 * 60 * 1000;
