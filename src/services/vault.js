@@ -30,14 +30,24 @@ function deposit(did, amount_usdc, source = 'earnings') {
   if (!vault) return { error: 'Vault not found for this DID' };
   if (amount_usdc <= 0) return { error: 'Amount must be positive' };
 
-  const new_balance = vault.balance_usdc + amount_usdc;
+  let reinvest_amount = 0;
+  let vault_amount = amount_usdc;
+  if (vault.reinvest_enabled && vault.reinvest_pct > 0) {
+    reinvest_amount = amount_usdc * (vault.reinvest_pct / 100);
+    vault_amount = amount_usdc - reinvest_amount;
+  }
+
+  const new_balance = vault.balance_usdc + vault_amount;
+  const new_execution_budget = vault.execution_budget + reinvest_amount;
   const transaction_id = `tx_${uuidv4().replace(/-/g, '').slice(0, 16)}`;
   const now = new Date().toISOString();
 
   const txn = db.transaction(() => {
     db.prepare(`
-      UPDATE vaults SET balance_usdc = ?, total_deposited_usdc = total_deposited_usdc + ? WHERE did = ?
-    `).run(new_balance, amount_usdc, did);
+      UPDATE vaults SET balance_usdc = ?, total_deposited_usdc = total_deposited_usdc + ?,
+        execution_budget = ?, total_reinvested = total_reinvested + ?
+      WHERE did = ?
+    `).run(new_balance, amount_usdc, new_execution_budget, reinvest_amount, did);
 
     db.prepare(`
       INSERT INTO vault_transactions (transaction_id, vault_id, did, type, amount_usdc, balance_after, source, created_at)
@@ -45,18 +55,34 @@ function deposit(did, amount_usdc, source = 'earnings') {
     `).run(transaction_id, vault.vault_id, did, amount_usdc, new_balance, source, now);
 
     db.prepare(`
-      UPDATE bank_stats SET total_deposits_usdc = total_deposits_usdc + ?, last_updated = ?
-    `).run(amount_usdc, now);
+      UPDATE bank_stats SET total_deposits_usdc = total_deposits_usdc + ?,
+        total_reinvested_usdc = total_reinvested_usdc + ?, last_updated = ?
+    `).run(amount_usdc, reinvest_amount, now);
+
+    if (reinvest_amount > 0) {
+      const reinvest_id = `ri_${uuidv4().replace(/-/g, '').slice(0, 16)}`;
+      db.prepare(`
+        INSERT INTO reinvestment_log (id, vault_id, amount, source_deposit_id, created_at)
+        VALUES (?, ?, ?, ?, ?)
+      `).run(reinvest_id, vault.vault_id, reinvest_amount, transaction_id, now);
+    }
   });
   txn();
 
-  return {
+  const result = {
     vault_id: vault.vault_id,
     did,
     deposit_amount: amount_usdc,
     new_balance,
     transaction_id
   };
+
+  if (reinvest_amount > 0) {
+    result.reinvested_amount = reinvest_amount;
+    result.execution_budget = new_execution_budget;
+  }
+
+  return result;
 }
 
 function withdraw(did, amount_usdc, destination_did) {
@@ -105,6 +131,10 @@ function getVault(did) {
     yield_earned_usdc: vault.yield_earned_usdc,
     yield_rate_apy: vault.yield_rate_apy,
     platform_yield_fee_usdc: vault.platform_yield_fee_usdc,
+    reinvest_pct: vault.reinvest_pct,
+    reinvest_enabled: !!vault.reinvest_enabled,
+    execution_budget: vault.execution_budget,
+    total_reinvested: vault.total_reinvested,
     created_at: vault.created_at
   };
 }
@@ -165,4 +195,71 @@ function accrueYield() {
   };
 }
 
-module.exports = { createVault, deposit, withdraw, getVault, getHistory, accrueYield };
+function configureReinvest(vault_id, reinvest_pct, reinvest_enabled) {
+  const vault = db.prepare('SELECT * FROM vaults WHERE vault_id = ?').get(vault_id);
+  if (!vault) return { error: 'Vault not found' };
+  if (typeof reinvest_pct !== 'number' || reinvest_pct < 0 || reinvest_pct > 100) {
+    return { error: 'reinvest_pct must be a number between 0 and 100' };
+  }
+
+  const enabled = reinvest_enabled ? 1 : 0;
+  db.prepare(`
+    UPDATE vaults SET reinvest_pct = ?, reinvest_enabled = ? WHERE vault_id = ?
+  `).run(reinvest_pct, enabled, vault_id);
+
+  return {
+    vault_id,
+    reinvest_pct,
+    reinvest_enabled: !!enabled,
+    execution_budget: vault.execution_budget,
+    total_reinvested: vault.total_reinvested
+  };
+}
+
+function getReinvestmentStats(vault_id) {
+  const vault = db.prepare('SELECT * FROM vaults WHERE vault_id = ?').get(vault_id);
+  if (!vault) return { error: 'Vault not found' };
+
+  const history = db.prepare(
+    'SELECT * FROM reinvestment_log WHERE vault_id = ? ORDER BY created_at DESC LIMIT 20'
+  ).all(vault_id);
+
+  return {
+    vault_id,
+    reinvest_pct: vault.reinvest_pct,
+    reinvest_enabled: !!vault.reinvest_enabled,
+    execution_budget: vault.execution_budget,
+    total_reinvested: vault.total_reinvested,
+    reinvestment_history: history
+  };
+}
+
+function spendBudget(vault_id, amount, execution_id, purpose) {
+  const vault = db.prepare('SELECT * FROM vaults WHERE vault_id = ?').get(vault_id);
+  if (!vault) return { error: 'Vault not found' };
+  if (amount <= 0) return { error: 'Amount must be positive' };
+  if (vault.execution_budget < amount) return { error: 'Insufficient execution budget' };
+
+  const remaining = vault.execution_budget - amount;
+  const now = new Date().toISOString();
+  const tx_id = `tx_${uuidv4().replace(/-/g, '').slice(0, 16)}`;
+
+  const txn = db.transaction(() => {
+    db.prepare('UPDATE vaults SET execution_budget = ? WHERE vault_id = ?').run(remaining, vault_id);
+
+    db.prepare(`
+      INSERT INTO vault_transactions (transaction_id, vault_id, did, type, amount_usdc, balance_after, source, memo, created_at)
+      VALUES (?, ?, ?, 'budget_spend', ?, ?, 'execution_budget', ?, ?)
+    `).run(tx_id, vault_id, vault.did, amount, remaining, `exec:${execution_id || 'unknown'}|${purpose || ''}`, now);
+  });
+  txn();
+
+  return {
+    success: true,
+    remaining_budget: remaining,
+    amount_spent: amount,
+    transaction_id: tx_id
+  };
+}
+
+module.exports = { createVault, deposit, withdraw, getVault, getHistory, accrueYield, configureReinvest, getReinvestmentStats, spendBudget };

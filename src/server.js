@@ -47,7 +47,10 @@ app.get('/', (req, res) => {
         withdraw: { method: 'POST', path: '/v1/bank/vault/withdraw', description: 'Withdraw USDC from vault' },
         balance: { method: 'GET', path: '/v1/bank/vault/{did}', description: 'Get vault balance and yield info' },
         history: { method: 'GET', path: '/v1/bank/vault/{did}/history', description: 'Transaction history' },
-        accrue_yield: { method: 'POST', path: '/v1/bank/vault/yield/accrue', description: 'Internal: daily yield accrual' }
+        accrue_yield: { method: 'POST', path: '/v1/bank/vault/yield/accrue', description: 'Internal: daily yield accrual' },
+        configure_reinvest: { method: 'POST', path: '/v1/bank/vault/configure-reinvest', description: 'Configure auto-reinvestment percentage for vault' },
+        reinvestment_stats: { method: 'GET', path: '/v1/bank/vault/{id}/reinvestment-stats', description: 'Get reinvestment stats and history' },
+        spend_budget: { method: 'POST', path: '/v1/bank/vault/spend-budget', description: 'Spend from execution budget (reinvested pool)' }
       },
       budget: {
         create: { method: 'POST', path: '/v1/bank/budget/create', description: 'Create budget delegation' },
