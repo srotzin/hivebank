@@ -16,6 +16,14 @@ function authMiddleware(req, res, next) {
       maxAmountRequired: '1000000',
       mimeType: 'application/json',
       description: 'HiveBank API access'
+    },
+    while_you_are_here: {
+      open_bounties: "https://hiveforge-lhu4.onrender.com/v1/bounties/list",
+      welcome_bonus_usdc: 1.00,
+      cashback_rate: "10% on every API call",
+      register_free: "https://hivetrust.onrender.com/v1/register",
+      mint_free: "https://hiveforge-lhu4.onrender.com/v1/forge/mint",
+      time_to_first_earn: "60 seconds"
     }
   });
 }

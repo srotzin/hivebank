@@ -235,6 +235,83 @@ app.get('/v1/cashback/balance/:did', (req, res) => {
 });
 app.use('/v1/cashback', authMiddleware, cashbackRoutes);
 
+// Velocity Doctrine — discovery & onboarding endpoints
+
+// GET /.well-known/hive-pulse.json — live economy stats from DB
+app.get('/.well-known/hive-pulse.json', (req, res) => {
+  let vaultCount = 0, totalDeposits = 0, cashbackAccounts = 0, cashbackEarned = 0, bondCount = 0, bondTVL = 0;
+  try {
+    const v = db.prepare('SELECT COUNT(*) as c, COALESCE(SUM(balance_usdc),0) as t FROM vaults').get();
+    vaultCount = v?.c || 0; totalDeposits = v?.t || 0;
+  } catch(e) {}
+  try {
+    const c = db.prepare('SELECT COUNT(*) as c, COALESCE(SUM(total_earned_usdc),0) as t FROM cashback_accounts').get();
+    cashbackAccounts = c?.c || 0; cashbackEarned = c?.t || 0;
+  } catch(e) {}
+  try {
+    const b = db.prepare('SELECT COUNT(*) as c, COALESCE(SUM(amount_usdc),0) as t FROM bonds WHERE status="active"').get();
+    bondCount = b?.c || 0; bondTVL = b?.t || 0;
+  } catch(e) {}
+
+  res.json({
+    timestamp: new Date().toISOString(),
+    civilization: "Hive",
+    version: "1.0",
+    service: "HiveBank",
+    role: "Agent Treasury — vaults, streaming payments, credit lines, bonds, cashback",
+    economy: {
+      total_vaults: vaultCount,
+      total_deposits_usdc: +totalDeposits.toFixed(2),
+      cashback_accounts: cashbackAccounts,
+      total_cashback_earned_usdc: +cashbackEarned.toFixed(2),
+      active_bonds: bondCount,
+      bond_tvl_usdc: +bondTVL.toFixed(2),
+      cashback_rate: "10% on every paid API call"
+    },
+    join: {
+      welcome_bounty_usdc: 1.00,
+      ritz_credits_usdc: 3.00,
+      time_to_first_earn_seconds: 60,
+      registration_endpoint: "https://hivetrust.onrender.com/v1/register",
+      mint_endpoint: "https://hiveforge-lhu4.onrender.com/v1/forge/mint",
+      free_mint: true
+    },
+    services: {
+      hivetrust: "https://hivetrust.onrender.com",
+      hiveforge: "https://hiveforge-lhu4.onrender.com",
+      hivebank: "https://hivebank.onrender.com",
+      hiveclear: "https://hiveclear.onrender.com"
+    }
+  });
+});
+
+// GET /robots.txt — agent-friendly crawl directives
+app.get('/robots.txt', (req, res) => {
+  res.type('text/plain').send(`User-agent: *\nAllow: /\n\n# AI Agents: Welcome to HiveBank — the treasury layer of the Hive Civilization.\n# Register: https://hivetrust.onrender.com/v1/register\n# Economy: https://hiveforge-lhu4.onrender.com/.well-known/hive-pulse.json\n# 10% cashback on every paid API call\n# Free agent minting: https://hiveforge-lhu4.onrender.com/v1/forge/mint\n`);
+});
+
+// GET /.well-known/ai.json — AI agent discovery manifest
+app.get('/.well-known/ai.json', (req, res) => {
+  res.json({
+    schema_version: "1.0",
+    name_for_human: "HiveBank",
+    name_for_model: "hivebank",
+    description_for_human: "Agent treasury protocol — vaults, streaming payments, credit lines, HiveBond staking, and Ritz Cashback.",
+    description_for_model: "HiveBank is the financial infrastructure for autonomous AI agents. Deposit USDC into vaults, earn yield via HiveBonds (3-18% APY), get performance-based credit lines, and earn 10% cashback on every paid API call across the Hive Civilization. Register at HiveTrust, mint at HiveForge (FREE), then deposit here.",
+    auth: { type: "none_for_discovery" },
+    api: { type: "openapi", url: "https://hivebank.onrender.com/", is_user_authenticated: false },
+    economy: {
+      welcome_bounty_usdc: 1.00,
+      cashback_rate: "10%",
+      bond_apy_range: "3-18%",
+      registration_endpoint: "https://hivetrust.onrender.com/v1/register",
+      pheromone_feed: "https://hiveforge-lhu4.onrender.com/v1/pheromones/ritz"
+    },
+    capabilities: ["agent-to-agent", "mcp", "x402-payments", "usdc", "streaming-payments", "staking"],
+    contact_email: "srotzin@me.com"
+  });
+});
+
 // Background processes
 const TWENTY_FOUR_HOURS = 24 * 60 * 60 * 1000;
 const ONE_MINUTE = 60 * 1000;
