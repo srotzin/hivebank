@@ -11,26 +11,26 @@ router.post('/apply', async (req, res) => {
   res.status(result.approved ? 201 : 200).json(result);
 });
 
-router.post('/draw', (req, res) => {
+router.post('/draw', async (req, res) => {
   const { did, amount_usdc } = req.body;
   if (!did || amount_usdc === undefined) return res.status(400).json({ error: 'did and amount_usdc are required' });
 
-  const result = credit.draw(did, amount_usdc);
+  const result = await credit.draw(did, amount_usdc);
   if (result.error) return res.status(400).json(result);
   res.json(result);
 });
 
-router.post('/repay', (req, res) => {
+router.post('/repay', async (req, res) => {
   const { did, amount_usdc } = req.body;
   if (!did || amount_usdc === undefined) return res.status(400).json({ error: 'did and amount_usdc are required' });
 
-  const result = credit.repay(did, amount_usdc);
+  const result = await credit.repay(did, amount_usdc);
   if (result.error) return res.status(400).json(result);
   res.json(result);
 });
 
-router.get('/:did', (req, res) => {
-  const result = credit.getStatus(req.params.did);
+router.get('/:did', async (req, res) => {
+  const result = await credit.getStatus(req.params.did);
   if (result.error) return res.status(404).json(result);
   res.json(result);
 });

@@ -25,37 +25,37 @@ router.post('/apply', async (req, res) => {
 });
 
 // POST /v1/credit/draw — Draw from credit line
-router.post('/draw', (req, res) => {
+router.post('/draw', async (req, res) => {
   const { credit_line_id, amount_usdc, purpose } = req.body;
   if (!credit_line_id || amount_usdc === undefined) {
     return res.status(400).json({ error: 'credit_line_id and amount_usdc are required' });
   }
 
-  const result = perfCredit.drawCredit(credit_line_id, amount_usdc, purpose);
+  const result = await perfCredit.drawCredit(credit_line_id, amount_usdc, purpose);
   if (result.error) return res.status(400).json(result);
   res.json(result);
 });
 
 // POST /v1/credit/repay — Repay credit line
-router.post('/repay', (req, res) => {
+router.post('/repay', async (req, res) => {
   const { credit_line_id, amount_usdc } = req.body;
   if (!credit_line_id || amount_usdc === undefined) {
     return res.status(400).json({ error: 'credit_line_id and amount_usdc are required' });
   }
 
-  const result = perfCredit.repayCredit(credit_line_id, amount_usdc);
+  const result = await perfCredit.repayCredit(credit_line_id, amount_usdc);
   if (result.error) return res.status(400).json(result);
   res.json(result);
 });
 
 // GET /v1/credit/stats — Platform-wide credit stats (public, no auth needed)
-router.get('/stats', (req, res) => {
-  res.json(perfCredit.getStats());
+router.get('/stats', async (req, res) => {
+  res.json(await perfCredit.getStats());
 });
 
 // GET /v1/credit/status/:did — Credit line status for an agent
-router.get('/status/:did', (req, res) => {
-  const result = perfCredit.getStatus(req.params.did);
+router.get('/status/:did', async (req, res) => {
+  const result = await perfCredit.getStatus(req.params.did);
   if (result.error) return res.status(404).json(result);
   res.json(result);
 });

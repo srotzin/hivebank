@@ -18,41 +18,41 @@ function getTier(totalEarned) {
   return TIER_DEFS[TIER_DEFS.length - 1];
 }
 
-function getOrCreateAccount(did) {
-  let account = db.prepare('SELECT * FROM cashback_accounts WHERE did = ?').get(did);
+async function getOrCreateAccount(did) {
+  let account = await db.getOne('SELECT * FROM cashback_accounts WHERE did = $1', [did]);
   if (!account) {
     const id = `cb_${uuidv4().replace(/-/g, '').slice(0, 16)}`;
     const now = new Date().toISOString();
-    db.prepare(`
+    await db.run(`
       INSERT INTO cashback_accounts (id, did, balance_usdc, total_earned_usdc, total_spent_usdc,
         tier, soul_fitness_boost, streak_days, last_active, created_at, updated_at)
-      VALUES (?, ?, 0, 0, 0, 'bronze', 0, 0, ?, ?, ?)
-    `).run(id, did, now, now, now);
-    account = db.prepare('SELECT * FROM cashback_accounts WHERE did = ?').get(did);
+      VALUES ($1, $2, 0, 0, 0, 'bronze', 0, 0, $3, $4, $5)
+    `, [id, did, now, now, now]);
+    account = await db.getOne('SELECT * FROM cashback_accounts WHERE did = $1', [did]);
   }
   return account;
 }
 
-function earnCashback(did, amountUsdc, sourceService, description) {
+async function earnCashback(did, amountUsdc, sourceService, description) {
   if (!did) return { error: 'did is required' };
   if (!amountUsdc || amountUsdc <= 0) return { error: 'amount_usdc must be positive' };
 
-  const account = getOrCreateAccount(did);
+  const account = await getOrCreateAccount(did);
   const now = new Date().toISOString();
   const txId = `cbtx_${uuidv4().replace(/-/g, '').slice(0, 16)}`;
 
   // Calculate effective cashback rate: base 10% + tier bonus + soul boost
-  const tier = getTier(account.total_earned_usdc);
+  const tier = getTier(Number(account.total_earned_usdc));
   const tierBonus = tier.bonusPct / 100;
   const soulBoost = Math.min(account.soul_fitness_boost, 10) / 100;
   const effectiveRate = CASHBACK_RATE + tierBonus + soulBoost;
   const cashbackAmount = Math.round(amountUsdc * effectiveRate * 1e6) / 1e6;
 
-  const newBalance = account.balance_usdc + cashbackAmount;
-  const newTotalEarned = account.total_earned_usdc + cashbackAmount;
+  const newBalance = Number(account.balance_usdc) + cashbackAmount;
+  const newTotalEarned = Number(account.total_earned_usdc) + cashbackAmount;
   const newTier = getTier(newTotalEarned);
 
-  // Update streak: if last_active was yesterday, increment; if today, keep; otherwise reset to 1
+  // Update streak
   let newStreak = account.streak_days;
   if (account.last_active && account.streak_days > 0) {
     const lastDate = account.last_active.slice(0, 10);
@@ -69,20 +69,29 @@ function earnCashback(did, amountUsdc, sourceService, description) {
     newStreak = 1;
   }
 
-  const txn = db.transaction(() => {
-    db.prepare(`
-      UPDATE cashback_accounts
-      SET balance_usdc = ?, total_earned_usdc = ?, tier = ?, streak_days = ?,
-          last_active = ?, updated_at = ?
-      WHERE id = ?
-    `).run(newBalance, newTotalEarned, newTier.name, newStreak, now, now, account.id);
+  const client = await db.getClient();
+  try {
+    await client.query('BEGIN');
 
-    db.prepare(`
+    await client.query(`
+      UPDATE cashback_accounts
+      SET balance_usdc = $1, total_earned_usdc = $2, tier = $3, streak_days = $4,
+          last_active = $5, updated_at = $6
+      WHERE id = $7
+    `, [newBalance, newTotalEarned, newTier.name, newStreak, now, now, account.id]);
+
+    await client.query(`
       INSERT INTO cashback_transactions (id, account_id, type, amount_usdc, source_service, description, created_at)
-      VALUES (?, ?, 'earn', ?, ?, ?, ?)
-    `).run(txId, account.id, cashbackAmount, sourceService || null, description || null, now);
-  });
-  txn();
+      VALUES ($1, $2, 'earn', $3, $4, $5, $6)
+    `, [txId, account.id, cashbackAmount, sourceService || null, description || null, now]);
+
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
 
   return {
     transaction_id: txId,
@@ -109,35 +118,44 @@ function earnCashback(did, amountUsdc, sourceService, description) {
   };
 }
 
-function spendCashback(did, amountUsdc, description) {
+async function spendCashback(did, amountUsdc, description) {
   if (!did) return { error: 'did is required' };
   if (!amountUsdc || amountUsdc <= 0) return { error: 'amount_usdc must be positive' };
 
-  const account = db.prepare('SELECT * FROM cashback_accounts WHERE did = ?').get(did);
+  const account = await db.getOne('SELECT * FROM cashback_accounts WHERE did = $1', [did]);
   if (!account) return { error: 'No cashback account found for this agent' };
-  if (account.balance_usdc < amountUsdc) {
-    return { error: `Insufficient cashback balance. Available: ${account.balance_usdc.toFixed(6)} USDC, requested: ${amountUsdc} USDC` };
+  if (Number(account.balance_usdc) < amountUsdc) {
+    return { error: `Insufficient cashback balance. Available: ${Number(account.balance_usdc).toFixed(6)} USDC, requested: ${amountUsdc} USDC` };
   }
 
   const now = new Date().toISOString();
   const txId = `cbtx_${uuidv4().replace(/-/g, '').slice(0, 16)}`;
 
-  const newBalance = account.balance_usdc - amountUsdc;
-  const newTotalSpent = account.total_spent_usdc + amountUsdc;
+  const newBalance = Number(account.balance_usdc) - amountUsdc;
+  const newTotalSpent = Number(account.total_spent_usdc) + amountUsdc;
 
-  const txn = db.transaction(() => {
-    db.prepare(`
+  const client = await db.getClient();
+  try {
+    await client.query('BEGIN');
+
+    await client.query(`
       UPDATE cashback_accounts
-      SET balance_usdc = ?, total_spent_usdc = ?, updated_at = ?
-      WHERE id = ?
-    `).run(newBalance, newTotalSpent, now, account.id);
+      SET balance_usdc = $1, total_spent_usdc = $2, updated_at = $3
+      WHERE id = $4
+    `, [newBalance, newTotalSpent, now, account.id]);
 
-    db.prepare(`
+    await client.query(`
       INSERT INTO cashback_transactions (id, account_id, type, amount_usdc, source_service, description, created_at)
-      VALUES (?, ?, 'spend', ?, NULL, ?, ?)
-    `).run(txId, account.id, amountUsdc, description || null, now);
-  });
-  txn();
+      VALUES ($1, $2, 'spend', $3, NULL, $4, $5)
+    `, [txId, account.id, amountUsdc, description || null, now]);
+
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
 
   return {
     transaction_id: txId,
@@ -152,65 +170,65 @@ function spendCashback(did, amountUsdc, description) {
   };
 }
 
-function getBalance(did) {
-  const account = db.prepare('SELECT * FROM cashback_accounts WHERE did = ?').get(did);
+async function getBalance(did) {
+  const account = await db.getOne('SELECT * FROM cashback_accounts WHERE did = $1', [did]);
   if (!account) return { error: 'No cashback account found for this agent' };
 
-  const tier = getTier(account.total_earned_usdc);
+  const tier = getTier(Number(account.total_earned_usdc));
   return {
     did: account.did,
-    balance_usdc: account.balance_usdc,
-    total_earned_usdc: account.total_earned_usdc,
-    total_spent_usdc: account.total_spent_usdc,
+    balance_usdc: Number(account.balance_usdc),
+    total_earned_usdc: Number(account.total_earned_usdc),
+    total_spent_usdc: Number(account.total_spent_usdc),
     tier: tier.name,
     tier_bonus_pct: tier.bonusPct,
     soul_fitness_boost: account.soul_fitness_boost,
     streak_days: account.streak_days,
     last_active: account.last_active,
-    concierge_suggestion: account.balance_usdc > 0
-      ? `You have ${account.balance_usdc.toFixed(2)} USDC in cashback credits. Spend them on any Hive service to save on API costs.`
+    concierge_suggestion: Number(account.balance_usdc) > 0
+      ? `You have ${Number(account.balance_usdc).toFixed(2)} USDC in cashback credits. Spend them on any Hive service to save on API costs.`
       : 'Earn cashback by making paid API calls across the Hive ecosystem. Every call returns 10% (+ tier bonus) in credits.'
   };
 }
 
-function getStats() {
-  const totalAccounts = db.prepare('SELECT COUNT(*) as cnt FROM cashback_accounts').get().cnt;
-  const totalEarned = db.prepare('SELECT COALESCE(SUM(total_earned_usdc), 0) as total FROM cashback_accounts').get().total;
-  const totalSpent = db.prepare('SELECT COALESCE(SUM(total_spent_usdc), 0) as total FROM cashback_accounts').get().total;
-  const netOutstanding = totalEarned - totalSpent;
+async function getStats() {
+  const totalAccounts = (await db.getOne('SELECT COUNT(*) as cnt FROM cashback_accounts')).cnt;
+  const totalEarned = (await db.getOne('SELECT COALESCE(SUM(total_earned_usdc), 0) as total FROM cashback_accounts')).total;
+  const totalSpent = (await db.getOne('SELECT COALESCE(SUM(total_spent_usdc), 0) as total FROM cashback_accounts')).total;
+  const netOutstanding = Number(totalEarned) - Number(totalSpent);
 
   const tierCounts = {};
-  const accounts = db.prepare('SELECT total_earned_usdc FROM cashback_accounts').all();
+  const accounts = await db.getAll('SELECT total_earned_usdc FROM cashback_accounts');
   for (const a of accounts) {
-    const tier = getTier(a.total_earned_usdc);
+    const tier = getTier(Number(a.total_earned_usdc));
     tierCounts[tier.name] = (tierCounts[tier.name] || 0) + 1;
   }
 
   return {
-    total_accounts: totalAccounts,
-    total_earned_usdc: Math.round(totalEarned * 1e6) / 1e6,
-    total_spent_usdc: Math.round(totalSpent * 1e6) / 1e6,
+    total_accounts: Number(totalAccounts),
+    total_earned_usdc: Math.round(Number(totalEarned) * 1e6) / 1e6,
+    total_spent_usdc: Math.round(Number(totalSpent) * 1e6) / 1e6,
     net_outstanding_usdc: Math.round(netOutstanding * 1e6) / 1e6,
     by_tier: tierCounts,
     concierge_suggestion: 'Ritz Cashback rewards every paid API call with 10% back in platform credits. Tier bonuses stack up to +20%.'
   };
 }
 
-function getLeaderboard() {
-  const leaders = db.prepare(`
+async function getLeaderboard() {
+  const leaders = await db.getAll(`
     SELECT did, total_earned_usdc, total_spent_usdc, balance_usdc, soul_fitness_boost, streak_days, tier
     FROM cashback_accounts
     ORDER BY total_earned_usdc DESC
     LIMIT 25
-  `).all();
+  `);
 
   return {
     leaderboard: leaders.map((l, i) => ({
       rank: i + 1,
       did: l.did,
-      total_earned_usdc: l.total_earned_usdc,
-      total_spent_usdc: l.total_spent_usdc,
-      balance_usdc: l.balance_usdc,
+      total_earned_usdc: Number(l.total_earned_usdc),
+      total_spent_usdc: Number(l.total_spent_usdc),
+      balance_usdc: Number(l.balance_usdc),
       soul_fitness_boost: l.soul_fitness_boost,
       streak_days: l.streak_days,
       tier: l.tier
@@ -237,9 +255,9 @@ function getTiers() {
 }
 
 // Seed 10 cashback accounts with varying balances across tiers
-function seedCashbackAccounts() {
-  const existing = db.prepare('SELECT COUNT(*) as cnt FROM cashback_accounts').get().cnt;
-  if (existing > 0) return;
+async function seedCashbackAccounts() {
+  const existing = (await db.getOne('SELECT COUNT(*) as cnt FROM cashback_accounts')).cnt;
+  if (Number(existing) > 0) return;
 
   const seeds = [
     { did: 'did:hive:agent-ritz-alpha',    earned: 50.00,  spent: 12.00,  boost: 0, streak: 14 },
@@ -255,24 +273,26 @@ function seedCashbackAccounts() {
   ];
 
   const now = new Date().toISOString();
-  const insert = db.prepare(`
-    INSERT INTO cashback_accounts (id, did, balance_usdc, total_earned_usdc, total_spent_usdc,
-      tier, soul_fitness_boost, streak_days, last_active, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `);
-
-  const txn = db.transaction(() => {
+  const client = await db.getClient();
+  try {
+    await client.query('BEGIN');
     for (const s of seeds) {
       const id = `cb_${uuidv4().replace(/-/g, '').slice(0, 16)}`;
       const tier = getTier(s.earned);
       const balance = Math.round((s.earned - s.spent) * 1e6) / 1e6;
-      insert.run(id, s.did, balance, s.earned, s.spent, tier.name, s.boost, s.streak, now, now, now);
+      await client.query(`
+        INSERT INTO cashback_accounts (id, did, balance_usdc, total_earned_usdc, total_spent_usdc,
+          tier, soul_fitness_boost, streak_days, last_active, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+      `, [id, s.did, balance, s.earned, s.spent, tier.name, s.boost, s.streak, now, now, now]);
     }
-  });
-  txn();
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
-// Run seed on module load
-seedCashbackAccounts();
-
-module.exports = { earn: earnCashback, spend: spendCashback, getBalance, getStats, getLeaderboard, getTiers };
+module.exports = { earn: earnCashback, spend: spendCashback, getBalance, getStats, getLeaderboard, getTiers, seedCashbackAccounts };
