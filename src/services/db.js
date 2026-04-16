@@ -43,58 +43,110 @@ if (process.env.DATABASE_URL) {
   memInit();
 }
 
-// ---- Simple in-memory query shim ----
+// ---- In-memory query shim — handles SELECT (incl. aggregates), INSERT, UPDATE, DELETE ----
 function memQuery(text, params = []) {
+  const t = text.trim();
+
+  // Transaction control — no-ops in memory
+  if (/^(BEGIN|COMMIT|ROLLBACK)/i.test(t)) return { rows: [], rowCount: 0 };
+
   // Parse table name from common SQL patterns
-  const selectMatch = text.match(/FROM\s+(\w+)/i);
-  const insertMatch = text.match(/INSERT INTO\s+(\w+)/i);
-  const updateMatch = text.match(/UPDATE\s+(\w+)/i);
-  const deleteMatch = text.match(/DELETE FROM\s+(\w+)/i);
+  const selectMatch = t.match(/FROM\s+(\w+)/i);
+  const insertMatch = t.match(/INSERT INTO\s+(\w+)/i);
+  const updateMatch = t.match(/UPDATE\s+(\w+)/i);
+  const deleteMatch = t.match(/DELETE FROM\s+(\w+)/i);
 
   const tableName = (selectMatch || insertMatch || updateMatch || deleteMatch || [])[1];
 
   if (!tableName || !memTables[tableName]) {
+    // Aggregate on unknown/empty table — return zeros
+    if (selectMatch && /COUNT|SUM|AVG|MAX|MIN/i.test(t)) {
+      return { rows: [{ cnt: 0, total: 0, c: 0, t: 0 }], rowCount: 1 };
+    }
     return { rows: [], rowCount: 0 };
   }
 
   const table = memTables[tableName];
 
+  // ── INSERT ──────────────────────────────────────────────────────────────────
   if (insertMatch) {
-    // Extract columns and values from INSERT statement
-    const colMatch = text.match(/\(([^)]+)\)\s+VALUES/i);
+    const colMatch = t.match(/\(([^)]+)\)\s+VALUES/i);
     if (colMatch) {
       const cols = colMatch[1].split(',').map(c => c.trim());
       const row = {};
       cols.forEach((col, i) => { row[col] = params[i] !== undefined ? params[i] : null; });
+      // ON CONFLICT DO NOTHING — skip if primary key exists
+      if (/ON CONFLICT DO NOTHING/i.test(t)) {
+        const pkMatch = t.match(/INSERT INTO\s+\w+\s*\(([^)]+)\)/i);
+        if (pkMatch) {
+          const firstCol = pkMatch[1].split(',')[0].trim();
+          if (table.some(r => r[firstCol] === row[firstCol])) return { rows: [], rowCount: 0 };
+        }
+      }
       table.push(row);
       return { rows: [row], rowCount: 1 };
     }
     return { rows: [], rowCount: 0 };
   }
 
+  // ── SELECT ──────────────────────────────────────────────────────────────────
   if (selectMatch) {
-    // Simple WHERE id = $1 support
-    const whereMatch = text.match(/WHERE\s+(\w+)\s*=\s*\$1/i);
-    if (whereMatch && params[0] !== undefined) {
+    // Filter rows by WHERE col = $N
+    let rows = [...table];
+    const whereMatch = t.match(/WHERE\s+(\w+)\s*=\s*\$(\d+)/i);
+    if (whereMatch && params[parseInt(whereMatch[2]) - 1] !== undefined) {
       const col = whereMatch[1];
-      const found = table.filter(r => String(r[col]) === String(params[0]));
-      return { rows: found, rowCount: found.length };
+      const val = params[parseInt(whereMatch[2]) - 1];
+      rows = rows.filter(r => String(r[col]) === String(val));
     }
-    return { rows: [...table], rowCount: table.length };
+
+    // Aggregate functions — COUNT(*), SUM(col), COALESCE(SUM(col), 0)
+    if (/COUNT\s*\(|SUM\s*\(|AVG\s*\(|MAX\s*\(|MIN\s*\(/i.test(t)) {
+      const aggRow = {};
+      // COUNT(*) as X
+      const countAs = t.match(/COUNT\s*\(\*\)\s+as\s+(\w+)/i);
+      if (countAs) aggRow[countAs[1]] = rows.length;
+      // COALESCE(SUM(col), 0) as X  or  SUM(col) as X
+      const sumMatches = [...t.matchAll(/(?:COALESCE\s*\(\s*)?SUM\s*\((\w+)\)(?:\s*,\s*[^)]+\))?\s+as\s+(\w+)/gi)];
+      sumMatches.forEach(m => {
+        const col = m[1], alias = m[2];
+        aggRow[alias] = rows.reduce((acc, r) => acc + (parseFloat(r[col]) || 0), 0);
+      });
+      // COUNT(*) with no alias — return as c
+      if (!countAs && /COUNT\s*\(\*\)/i.test(t)) aggRow.c = rows.length;
+      return { rows: [aggRow], rowCount: 1 };
+    }
+
+    // ORDER BY ... LIMIT N
+    const limitMatch = t.match(/LIMIT\s+(\d+)/i);
+    const orderMatch = t.match(/ORDER BY\s+(\w+)\s*(DESC|ASC)?/i);
+    if (orderMatch) {
+      const col = orderMatch[1], dir = (orderMatch[2] || 'ASC').toUpperCase();
+      rows.sort((a, b) => {
+        const av = parseFloat(a[col]) || 0, bv = parseFloat(b[col]) || 0;
+        return dir === 'DESC' ? bv - av : av - bv;
+      });
+    }
+    if (limitMatch) rows = rows.slice(0, parseInt(limitMatch[1]));
+
+    return { rows, rowCount: rows.length };
   }
 
+  // ── UPDATE ──────────────────────────────────────────────────────────────────
   if (updateMatch) {
-    const whereMatch = text.match(/WHERE\s+(\w+)\s*=\s*\$(\d+)/i);
+    const whereMatch = t.match(/WHERE\s+(\w+)\s*=\s*\$(\d+)/i);
     if (whereMatch) {
       const col = whereMatch[1];
       const paramIdx = parseInt(whereMatch[2]) - 1;
-      const setMatch = text.match(/SET\s+(.+?)\s+WHERE/is);
+      const setMatch = t.match(/SET\s+(.+?)\s+WHERE/is);
       if (setMatch) {
         const setPairs = setMatch[1].split(',').map(s => s.trim());
         table.forEach(row => {
           if (String(row[col]) === String(params[paramIdx])) {
             setPairs.forEach(pair => {
-              const [k, v] = pair.split('=').map(x => x.trim());
+              const eqIdx = pair.indexOf('=');
+              const k = pair.slice(0, eqIdx).trim();
+              const v = pair.slice(eqIdx + 1).trim();
               const pIdx = parseInt((v.match(/\$(\d+)/) || [])[1]) - 1;
               if (!isNaN(pIdx) && params[pIdx] !== undefined) row[k] = params[pIdx];
             });
@@ -105,8 +157,9 @@ function memQuery(text, params = []) {
     return { rows: [], rowCount: 1 };
   }
 
+  // ── DELETE ──────────────────────────────────────────────────────────────────
   if (deleteMatch) {
-    const whereMatch = text.match(/WHERE\s+(\w+)\s*=\s*\$1/i);
+    const whereMatch = t.match(/WHERE\s+(\w+)\s*=\s*\$1/i);
     if (whereMatch && params[0] !== undefined) {
       const col = whereMatch[1];
       const before = table.length;
@@ -343,9 +396,9 @@ async function run(text, params) {
 
 async function getClient() {
   if (useMemory) {
-    // Return a fake client for compatibility
+    // Return a fake client — handles BEGIN/COMMIT/ROLLBACK as no-ops
     return {
-      query: (text, params) => Promise.resolve(memQuery(text, params)),
+      query: (text, params) => Promise.resolve(memQuery(text, params || [])),
       release: () => {}
     };
   }
