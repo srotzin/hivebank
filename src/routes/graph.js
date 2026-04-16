@@ -2,10 +2,11 @@
  * Agent Transaction Graph — Routes
  * The Bloomberg Terminal of agent commerce.
  *
- * POST   /v1/bank/graph/record        — Record a transaction between two agents
- * GET    /v1/bank/graph/agent/:did    — Agent credit history & graph
- * GET    /v1/bank/graph/network       — Aggregate network stats
- * GET    /v1/bank/graph/insights/:did — AI-style agent insights
+ * POST   /v1/bank/graph/record           — Record a transaction between two agents
+ * GET    /v1/bank/graph/agent/:did       — Agent credit history & graph
+ * GET    /v1/bank/graph/network          — Aggregate network stats
+ * GET    /v1/bank/graph/insights/:did    — AI-style agent insights
+ * GET    /v1/bank/graph/explain/:txId    — GDPR Art. 22 human-readable explanation
  */
 
 const express = require('express');
@@ -16,6 +17,7 @@ const {
   getAgentGraph,
   getNetworkStats,
   getAgentInsights,
+  transactions,
 } = require('../services/graph');
 
 const SVC = 'hivebank';
@@ -139,6 +141,91 @@ router.get('/insights/:did', (req, res) => {
   return ok(res, SVC, { insights }, {
     model: 'hive-graph-intelligence-v1',
     generated_at: new Date().toISOString(),
+  });
+});
+
+// ─── GET /v1/bank/graph/explain/:txId ───────────────────────────────────────
+// GDPR Article 22 — Automated Decision Explanation
+router.get('/explain/:txId', (req, res) => {
+  const { txId } = req.params;
+
+  if (!txId || !txId.trim()) {
+    return err(res, SVC, 'MISSING_TX_ID', 'txId parameter is required.', 400);
+  }
+
+  const tx = transactions.get(txId);
+
+  if (!tx) {
+    // Graceful not-found: still explains the GDPR right
+    return res.status(404).json({
+      success: false,
+      service: SVC,
+      error: {
+        code: 'TRANSACTION_NOT_FOUND',
+        message: `Transaction ${txId} was not found in the HiveBank ledger.`,
+      },
+      gdpr_notice: {
+        right: 'GDPR Article 22 — Right to Explanation for Automated Decisions',
+        description:
+          'Under GDPR Article 22, any individual or agent subject to a solely automated decision ' +
+          'that produces legal or similarly significant effects has the right to obtain a meaningful ' +
+          'explanation of the logic involved, as well as the right to request human review.',
+        what_this_endpoint_does:
+          'GET /v1/bank/graph/explain/:txId returns a plain-English explanation of any transaction ' +
+          'recorded in HiveBank, including the agents involved, the amount, the service that triggered ' +
+          'the transaction, and the data fields that drove the automated decision.',
+        human_review_available: true,
+        human_review_endpoint: `POST /v1/bank/graph/review-request/${txId}`,
+        legal_basis: 'GDPR Article 22 — Automated Decision Explanation',
+        gdpr_contact: 'privacy@thehiveryiq.com',
+      },
+      timestamp: new Date().toISOString(),
+    });
+  }
+
+  // Format date for human-readable explanation
+  const txDate = new Date(tx.timestamp);
+  const formattedDate = txDate.toLocaleDateString('en-US', {
+    year: 'numeric', month: 'long', day: 'numeric',
+    hour: '2-digit', minute: '2-digit', timeZoneName: 'short',
+  });
+
+  const explanation =
+    `Agent ${tx.from_did} paid ${tx.amount_usdc.toFixed(2)} USDC to Agent ${tx.to_did} ` +
+    `for ${tx.service} on ${formattedDate}. ` +
+    `This transaction was initiated automatically based on a programmatic request to the HiveBank ` +
+    `${tx.service} service. No human was involved in this decision.`;
+
+  return res.json({
+    success: true,
+    service: SVC,
+    data: {
+      transaction_id: tx.tx_id,
+      explanation,
+      legal_basis: 'GDPR Article 22 — Automated Decision Explanation',
+      data_used: [
+        'from_did',
+        'to_did',
+        'amount_usdc',
+        'service',
+        'timestamp',
+        'fee_collected',
+      ],
+      transaction_details: {
+        from_did:      tx.from_did,
+        to_did:        tx.to_did,
+        amount_usdc:   tx.amount_usdc,
+        service:       tx.service,
+        fee_collected: tx.fee_collected,
+        timestamp:     tx.timestamp,
+        recorded_at:   tx.recorded_at,
+        settled:       tx.graph_metadata?.settled ?? true,
+      },
+      human_review_available: true,
+      human_review_endpoint:  `POST /v1/bank/graph/review-request/${tx.tx_id}`,
+      gdpr_contact: 'privacy@thehiveryiq.com',
+    },
+    timestamp: new Date().toISOString(),
   });
 });
 

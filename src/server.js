@@ -17,7 +17,8 @@ const budget = require('./services/budget');
 const db = require('./services/db');
 
 // ─── Agent Transaction Graph ─────────────────────────────────────────────────
-const graphRoutes = require('./routes/graph');
+const graphRoutes       = require('./routes/graph');
+const complianceRoutes  = require('./routes/compliance');
 const { seedGraph } = require('./services/seed');
 
 const app = express();
@@ -105,7 +106,11 @@ app.get('/', (req, res) => {
         record:   { method: 'POST', path: '/v1/bank/graph/record',         description: 'Record agent-to-agent transaction in the social graph' },
         agent:    { method: 'GET',  path: '/v1/bank/graph/agent/:did',     description: 'Agent credit history — counterparties, volume, frequency' },
         network:  { method: 'GET',  path: '/v1/bank/graph/network',        description: 'Aggregate network stats — top agents, services, volume trends' },
-        insights: { method: 'GET',  path: '/v1/bank/graph/insights/:did',  description: 'AI-style agent insights — trust level, commerce profile, recommendations' }
+        insights: { method: 'GET',  path: '/v1/bank/graph/insights/:did',  description: 'AI-style agent insights — trust level, commerce profile, recommendations' },
+        explain:  { method: 'GET',  path: '/v1/bank/graph/explain/:txId', description: 'GDPR Art. 22 — Human-readable explanation of any automated transaction decision' }
+      },
+      compliance: {
+        eu_ai_act: { method: 'GET', path: '/v1/bank/compliance/eu-ai-act', description: 'EU AI Act 2024/1689 compliance status for HiveBank automated systems' }
       }
     },
     sla: {
@@ -315,6 +320,9 @@ app.use('/v1/cashback', authMiddleware, cashbackRoutes);
 
 // ─── Agent Transaction Graph routes (auth required) ───────────────────────────
 app.use('/v1/bank/graph', authMiddleware, graphRoutes);
+
+// ─── Compliance routes (public — no auth required) ────────────────────────────
+app.use('/v1/bank/compliance', complianceRoutes);
 
 // Velocity Doctrine — discovery & onboarding endpoints
 
