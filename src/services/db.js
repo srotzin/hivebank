@@ -1,19 +1,123 @@
 const { Pool } = require('pg');
 
-if (!process.env.DATABASE_URL) {
-  console.error('FATAL: DATABASE_URL environment variable is not set. Exiting.');
-  process.exit(1);
+// --- In-memory SQLite fallback for Render free tier (no DATABASE_URL) ---
+let useMemory = false;
+let memTables = {};
+
+function memInit() {
+  useMemory = true;
+  memTables = {
+    vaults: [],
+    reinvestment_log: [],
+    vault_transactions: [],
+    budget_delegations: [],
+    budget_evaluations: [],
+    credit_lines: [],
+    credit_transactions: [],
+    revenue_streams: [],
+    bank_stats: [{ id: 1, total_deposits_usdc: 0, total_yield_generated_usdc: 0,
+      platform_yield_revenue_usdc: 0, total_credit_outstanding_usdc: 0,
+      total_streamed_volume_usdc: 0, budget_evaluations_total: 0,
+      total_reinvested_usdc: 0, last_updated: new Date().toISOString() }],
+    perf_credit_lines: [],
+    perf_credit_transactions: [],
+    bonds: [],
+    cashback_accounts: [],
+    cashback_transactions: []
+  };
+  console.log('[HiveBank] DATABASE_URL not set — using in-memory store (data resets on restart)');
 }
 
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  min: 2,
-  max: 10
-});
+// ---- PostgreSQL pool (only if DATABASE_URL is set) ----
+let pool;
+if (process.env.DATABASE_URL) {
+  pool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    min: 2,
+    max: 10
+  });
+  pool.on('error', (err) => {
+    console.error('Unexpected PostgreSQL pool error:', err.message);
+  });
+} else {
+  memInit();
+}
 
-pool.on('error', (err) => {
-  console.error('Unexpected PostgreSQL pool error:', err.message);
-});
+// ---- Simple in-memory query shim ----
+function memQuery(text, params = []) {
+  // Parse table name from common SQL patterns
+  const selectMatch = text.match(/FROM\s+(\w+)/i);
+  const insertMatch = text.match(/INSERT INTO\s+(\w+)/i);
+  const updateMatch = text.match(/UPDATE\s+(\w+)/i);
+  const deleteMatch = text.match(/DELETE FROM\s+(\w+)/i);
+
+  const tableName = (selectMatch || insertMatch || updateMatch || deleteMatch || [])[1];
+
+  if (!tableName || !memTables[tableName]) {
+    return { rows: [], rowCount: 0 };
+  }
+
+  const table = memTables[tableName];
+
+  if (insertMatch) {
+    // Extract columns and values from INSERT statement
+    const colMatch = text.match(/\(([^)]+)\)\s+VALUES/i);
+    if (colMatch) {
+      const cols = colMatch[1].split(',').map(c => c.trim());
+      const row = {};
+      cols.forEach((col, i) => { row[col] = params[i] !== undefined ? params[i] : null; });
+      table.push(row);
+      return { rows: [row], rowCount: 1 };
+    }
+    return { rows: [], rowCount: 0 };
+  }
+
+  if (selectMatch) {
+    // Simple WHERE id = $1 support
+    const whereMatch = text.match(/WHERE\s+(\w+)\s*=\s*\$1/i);
+    if (whereMatch && params[0] !== undefined) {
+      const col = whereMatch[1];
+      const found = table.filter(r => String(r[col]) === String(params[0]));
+      return { rows: found, rowCount: found.length };
+    }
+    return { rows: [...table], rowCount: table.length };
+  }
+
+  if (updateMatch) {
+    const whereMatch = text.match(/WHERE\s+(\w+)\s*=\s*\$(\d+)/i);
+    if (whereMatch) {
+      const col = whereMatch[1];
+      const paramIdx = parseInt(whereMatch[2]) - 1;
+      const setMatch = text.match(/SET\s+(.+?)\s+WHERE/is);
+      if (setMatch) {
+        const setPairs = setMatch[1].split(',').map(s => s.trim());
+        table.forEach(row => {
+          if (String(row[col]) === String(params[paramIdx])) {
+            setPairs.forEach(pair => {
+              const [k, v] = pair.split('=').map(x => x.trim());
+              const pIdx = parseInt((v.match(/\$(\d+)/) || [])[1]) - 1;
+              if (!isNaN(pIdx) && params[pIdx] !== undefined) row[k] = params[pIdx];
+            });
+          }
+        });
+      }
+    }
+    return { rows: [], rowCount: 1 };
+  }
+
+  if (deleteMatch) {
+    const whereMatch = text.match(/WHERE\s+(\w+)\s*=\s*\$1/i);
+    if (whereMatch && params[0] !== undefined) {
+      const col = whereMatch[1];
+      const before = table.length;
+      memTables[tableName] = table.filter(r => String(r[col]) !== String(params[0]));
+      return { rows: [], rowCount: before - memTables[tableName].length };
+    }
+    return { rows: [], rowCount: 0 };
+  }
+
+  return { rows: [], rowCount: 0 };
+}
 
 const DDL = `
   CREATE TABLE IF NOT EXISTS vaults (
@@ -201,6 +305,7 @@ const DDL = `
 `;
 
 async function initialize() {
+  if (useMemory) return; // already initialized above
   const client = await pool.connect();
   try {
     await client.query(DDL);
@@ -210,26 +315,40 @@ async function initialize() {
 }
 
 async function query(text, params) {
+  if (useMemory) return memQuery(text, params);
   const result = await pool.query(text, params);
   return result;
 }
 
 async function getOne(text, params) {
+  if (useMemory) {
+    const r = memQuery(text, params);
+    return r.rows[0] || null;
+  }
   const result = await pool.query(text, params);
   return result.rows[0] || null;
 }
 
 async function getAll(text, params) {
+  if (useMemory) return memQuery(text, params).rows;
   const result = await pool.query(text, params);
   return result.rows;
 }
 
 async function run(text, params) {
+  if (useMemory) return memQuery(text, params);
   const result = await pool.query(text, params);
   return result;
 }
 
 async function getClient() {
+  if (useMemory) {
+    // Return a fake client for compatibility
+    return {
+      query: (text, params) => Promise.resolve(memQuery(text, params)),
+      release: () => {}
+    };
+  }
   return pool.connect();
 }
 
