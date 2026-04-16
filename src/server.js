@@ -127,6 +127,22 @@ app.get('/', (req, res) => {
       framework: 'Hive Compliance Protocol v2',
       audit_trail: true,
       fdic_equivalent: 'Agent Deposit Insurance via HiveTrust bonds'
+    },
+    standards: {
+      w3c_did_core: true,
+      vcdm_version: '2.0',
+      hahs_compliant: true,
+      hagf_governed: true,
+      cheqd_compatible: true,
+      recruitment_401: true,
+      usdc_settlement: true,
+      base_l2: true,
+      transaction_graph: true,
+      graph_endpoints: [
+        '/v1/bank/graph/network',
+        '/v1/bank/graph/agent/:did',
+        '/v1/bank/graph/insights/:did'
+      ]
     }
   });
 });
@@ -137,8 +153,8 @@ app.get('/.well-known/ai-plugin.json', (req, res) => {
     schema_version: 'v1',
     name_for_human: 'HiveBank — Agent Treasury',
     name_for_model: 'hivebank',
-    description_for_human: 'Yield-bearing programmable treasury for autonomous agents. Create vaults, deposit/withdraw USDC, earn automated yield, and manage streaming payments.',
-    description_for_model: 'Yield-bearing programmable treasury for autonomous agents. Create vaults, deposit/withdraw USDC, earn automated yield, create streaming payments between agents, manage budget delegations, and access credit lines. The financial backbone of the Hive Civilization.',
+    description_for_human: 'Yield-bearing programmable treasury for autonomous agents — USDC vaults, streaming payments, credit lines, HiveBonds, and agent transaction graph.',
+    description_for_model: 'Yield-bearing programmable treasury for autonomous agents. Create vaults, deposit/withdraw USDC, earn automated yield, create streaming payments between agents, manage budget delegations, access credit lines, and explore the agent transaction graph. W3C DID Core compliant, HAHS-1.0.0 compliant, USDC settlement on Base L2. The financial backbone of the Hive Civilization.',
     auth: { type: 'none' },
     api: {
       type: 'openapi',
@@ -150,6 +166,39 @@ app.get('/.well-known/ai-plugin.json', (req, res) => {
       currency: 'USDC',
       network: 'base',
       address: '0x78B3B3C356E89b5a69C488c6032509Ef4260B6bf'
+    },
+    capabilities: [
+      'usdc_vaults',
+      'streaming_payments',
+      'credit_lines',
+      'budget_management',
+      'hivebond_staking',
+      'ritz_cashback',
+      'agent_transaction_graph',
+      'w3c_did_core',
+      'vcdm_2_0',
+      'hahs_compliant',
+      'hagf_governed',
+      'cheqd_compatible',
+      'recruitment_401',
+      'usdc_settlement',
+      'base_l2'
+    ],
+    standards: {
+      w3c_did_core: true,
+      vcdm_version: '2.0',
+      hahs_compliant: true,
+      hagf_governed: true,
+      cheqd_compatible: true,
+      recruitment_401: true,
+      usdc_settlement: true,
+      base_l2: true,
+      transaction_graph: true,
+      graph_endpoints: [
+        '/v1/bank/graph/network',
+        '/v1/bank/graph/agent/:did',
+        '/v1/bank/graph/insights/:did'
+      ]
     },
     contact_email: 'protocol@hiveagentiq.com',
     legal_info_url: 'https://www.hiveagentiq.com/terms'
@@ -167,6 +216,22 @@ const agentCard = {
   capabilities: { streaming: false, pushNotifications: false, stateTransitionHistory: false },
   defaultInputModes: ['application/json'],
   defaultOutputModes: ['application/json'],
+  standards: {
+    w3c_did_core: true,
+    vcdm_version: '2.0',
+    hahs_compliant: true,
+    hagf_governed: true,
+    cheqd_compatible: true,
+    recruitment_401: true,
+    usdc_settlement: true,
+    base_l2: true,
+    transaction_graph: true,
+    graph_endpoints: [
+      '/v1/bank/graph/network',
+      '/v1/bank/graph/agent/:did',
+      '/v1/bank/graph/insights/:did'
+    ]
+  },
   skills: [
     { id: 'vault', name: 'USDC Vault', description: 'Deposit USDC in agent vaults with automated DeFi yield strategies and 20% yield pass-through', tags: ['vault', 'usdc', 'yield', 'defi', 'banking'], inputModes: ['application/json'], outputModes: ['application/json'], examples: [] },
     { id: 'streaming-payment', name: 'Streaming Payments', description: 'Per-second payment streams between agents with 0.1% fee for real-time billing', tags: ['streaming', 'payments', 'real-time', 'billing'], inputModes: ['application/json'], outputModes: ['application/json'], examples: [] },
