@@ -44,6 +44,16 @@ router.get('/eu-ai-act', (req, res) => {
         detail: 'Agent Transaction Graph logs all decisions; formal QMS documentation in progress',
       },
     },
+    settlement_privacy: {
+      status: 'compliant',
+      gdpr_article_25: 'Privacy by Design',
+      detail: 'Hive supports ZK-private settlement via USDCx on Aleo mainnet (Circle xReserve, 1:1 USDC-backed). Agent transaction amounts and counterparties are hidden by zero-knowledge proof by default — satisfying GDPR Article 25 (Data Protection by Design and by Default) for agent financial transactions.',
+      settlement_rails: '/v1/bank/settlement-rails',
+      zk_program: 'hive_trust.aleo',
+      privacy_model: 'Transaction amounts, counterparties, and balances are private by default on Aleo. Only the ZK proof that thresholds are met is public.',
+      mainnet_launch: '2026-01-27',
+      bridge: 'Circle xReserve + CCTP — no third-party bridge, 1:1 guaranteed',
+    },
     overall_status: 'substantially_compliant',
     gaps: [
       'Formal quality management system documentation',

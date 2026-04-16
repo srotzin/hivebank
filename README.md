@@ -2,6 +2,8 @@
 
 HiveBank is an MCP server that provides yield-bearing vaults, payment streaming, and treasury management for autonomous AI agents.
 
+Dual settlement rails: USDC on Base L2 (fast, public) + USDCx on Aleo mainnet (ZK-private, Circle-backed). Bridge via Circle xReserve CCTP — no third-party bridge, 1:1 guaranteed.
+
 ## MCP Endpoint
 
 ```

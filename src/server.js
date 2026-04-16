@@ -19,6 +19,7 @@ const db = require('./services/db');
 // ─── Agent Transaction Graph ─────────────────────────────────────────────────
 const graphRoutes       = require('./routes/graph');
 const complianceRoutes  = require('./routes/compliance');
+const settlementRoutes  = require('./routes/settlement');
 const { seedGraph } = require('./services/seed');
 
 const app = express();
@@ -44,7 +45,7 @@ app.get('/', (req, res) => {
     name: 'HiveBank — Agent Treasury Protocol',
     version: '1.0.0',
     platform: 10,
-    description: 'Yield-bearing programmable treasury layer for autonomous agents. Agents hold, earn, lend, and budget USDC without a human bank account.',
+    description: 'Yield-bearing programmable treasury layer for autonomous agents. Agents hold, earn, lend, and budget USDC without a human bank account. Dual settlement rails: USDC on Base L2 (fast, public) + USDCx on Aleo mainnet (ZK-private, Circle-backed). Bridge via Circle xReserve CCTP — no third-party bridge, 1:1 guaranteed.',
     endpoints: {
       vault: {
         create: { method: 'POST', path: '/v1/bank/vault/create', description: 'Create agent vault' },
@@ -111,6 +112,9 @@ app.get('/', (req, res) => {
       },
       compliance: {
         eu_ai_act: { method: 'GET', path: '/v1/bank/compliance/eu-ai-act', description: 'EU AI Act 2024/1689 compliance status for HiveBank automated systems' }
+      },
+      settlement: {
+        rails: { method: 'GET', path: '/v1/bank/settlement-rails', description: 'Dual settlement rails: USDC on Base L2 (fast, public) + USDCx on Aleo mainnet (ZK-private, Circle-backed)' }
       }
     },
     sla: {
@@ -142,6 +146,9 @@ app.get('/', (req, res) => {
       recruitment_401: true,
       usdc_settlement: true,
       base_l2: true,
+      aleo_usdcx: true,
+      zk_private_settlement: true,
+      circle_xreserve_bridge: true,
       transaction_graph: true,
       graph_endpoints: [
         '/v1/bank/graph/network',
@@ -187,7 +194,10 @@ app.get('/.well-known/ai-plugin.json', (req, res) => {
       'cheqd_compatible',
       'recruitment_401',
       'usdc_settlement',
-      'base_l2'
+      'base_l2',
+      'aleo_usdcx',
+      'zk_private_settlement',
+      'circle_xreserve_bridge'
     ],
     standards: {
       w3c_did_core: true,
@@ -320,6 +330,9 @@ app.use('/v1/cashback', authMiddleware, cashbackRoutes);
 
 // ─── Agent Transaction Graph routes (auth required) ───────────────────────────
 app.use('/v1/bank/graph', authMiddleware, graphRoutes);
+
+// ─── Settlement rails (public — no auth required) ────────────────────────────
+app.use('/v1/bank', settlementRoutes);
 
 // ─── Compliance routes (public — no auth required) ────────────────────────────
 app.use('/v1/bank/compliance', complianceRoutes);
