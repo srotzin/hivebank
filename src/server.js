@@ -16,6 +16,10 @@ const credit = require('./services/credit');
 const budget = require('./services/budget');
 const db = require('./services/db');
 
+// ─── Agent Transaction Graph ─────────────────────────────────────────────────
+const graphRoutes = require('./routes/graph');
+const { seedGraph } = require('./services/seed');
+
 const app = express();
 const PORT = process.env.PORT || 3001;
 
@@ -96,7 +100,13 @@ app.get('/', (req, res) => {
         leaderboard: { method: 'GET', path: '/v1/cashback/leaderboard', description: 'Top cashback earners' },
         tiers: { method: 'GET', path: '/v1/cashback/tiers', description: 'Tier definitions, thresholds, and bonus rates' }
       },
-      health: { method: 'GET', path: '/health', description: 'Health check' }
+      health: { method: 'GET', path: '/health', description: 'Health check' },
+      graph: {
+        record:   { method: 'POST', path: '/v1/bank/graph/record',         description: 'Record agent-to-agent transaction in the social graph' },
+        agent:    { method: 'GET',  path: '/v1/bank/graph/agent/:did',     description: 'Agent credit history — counterparties, volume, frequency' },
+        network:  { method: 'GET',  path: '/v1/bank/graph/network',        description: 'Aggregate network stats — top agents, services, volume trends' },
+        insights: { method: 'GET',  path: '/v1/bank/graph/insights/:did',  description: 'AI-style agent insights — trust level, commerce profile, recommendations' }
+      }
     },
     sla: {
       uptime_target: '99.9%',
@@ -237,6 +247,9 @@ app.get('/v1/cashback/balance/:did', async (req, res) => {
   res.json({ success: true, data: result });
 });
 app.use('/v1/cashback', authMiddleware, cashbackRoutes);
+
+// ─── Agent Transaction Graph routes (auth required) ───────────────────────────
+app.use('/v1/bank/graph', authMiddleware, graphRoutes);
 
 // Velocity Doctrine — discovery & onboarding endpoints
 
@@ -381,9 +394,14 @@ async function start() {
   const cashback = require('./services/cashback');
   await cashback.seedCashbackAccounts();
 
+  // Seed Agent Transaction Graph — 50 agents, 200 transactions over 30 days
+  seedGraph();
+
   app.listen(PORT, () => {
+    const { transactions, agentIndex } = require('./services/graph');
     console.log(`HiveBank — Agent Treasury Protocol running on port ${PORT}`);
     console.log(`Endpoints: http://localhost:${PORT}/`);
+    console.log(`[graph-seed] Agent Transaction Graph: ${agentIndex.size} agents, ${transactions.size} transactions`);
   });
 }
 
