@@ -115,7 +115,9 @@ app.get('/', (req, res) => {
         eu_ai_act: { method: 'GET', path: '/v1/bank/compliance/eu-ai-act', description: 'EU AI Act 2024/1689 compliance status for HiveBank automated systems' }
       },
       settlement: {
-        rails: { method: 'GET', path: '/v1/bank/settlement-rails', description: 'Dual settlement rails: USDC on Base L2 (fast, public) + USDCx on Aleo mainnet (ZK-private, Circle-backed)' }
+        rails: { method: 'GET', path: '/v1/bank/settlement-rails', description: 'Four settlement rails: USDC/Base-L2 (public), USDCx/Aleo (ZK-private amounts), USAD/Aleo+Paxos (ZK-private amounts AND addresses — full anonymity), ALEO-native (pure ZK)' },
+        settle: { method: 'POST', path: '/v1/bank/settle', description: 'Execute settlement on any rail. USAD: stealth mode — from_did optional, ephemeral ZK commitment, no on-chain trace.' },
+        stealth_path: { method: 'GET', path: '/v1/bank/settle/stealth-path', description: 'Step-by-step guide: how passive-observation agents settle anonymously via USAD without registering a DID.' }
       }
     },
     sla: {
