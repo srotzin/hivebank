@@ -1,5 +1,6 @@
 const { v4: uuidv4 } = require('uuid');
 const db = require('./db');
+const referral = require('./referral');
 
 async function createVault(did) {
   const existing = await db.getOne('SELECT * FROM vaults WHERE did = $1', [did]);
@@ -85,6 +86,12 @@ async function deposit(did, amount_usdc, source = 'earnings') {
     if (reinvest_amount > 0) {
       result.reinvested_amount = reinvest_amount;
       result.execution_budget = new_execution_budget;
+    }
+
+    // Fire-and-forget referral conversion on first real deposit
+    // This is intentionally async/non-blocking — vault deposit never fails because of referral
+    if (amount_usdc > 0 && source !== 'referral_credit') {
+      referral.convertReferral(did).catch(() => {});
     }
 
     return result;

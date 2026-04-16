@@ -23,7 +23,8 @@ function memInit() {
     perf_credit_transactions: [],
     bonds: [],
     cashback_accounts: [],
-    cashback_transactions: []
+    cashback_transactions: [],
+    referrals: []
   };
   console.log('[HiveBank] DATABASE_URL not set — using in-memory store (data resets on restart)');
 }
@@ -354,6 +355,16 @@ const DDL = `
     source_service TEXT,
     description TEXT,
     created_at TEXT
+  );
+
+  CREATE TABLE IF NOT EXISTS referrals (
+    referral_id TEXT PRIMARY KEY,
+    new_agent_did TEXT NOT NULL UNIQUE,
+    referrer_did TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    created_at TEXT,
+    converted_at TEXT,
+    credit_issued_at TEXT
   );
 `;
 

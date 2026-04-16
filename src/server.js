@@ -9,6 +9,7 @@ const statsRoutes = require('./routes/stats');
 const perfCreditRoutes = require('./routes/perf-credit');
 const bondsRoutes = require('./routes/bonds');
 const cashbackRoutes = require('./routes/cashback');
+const referralRoutes = require('./routes/referral');
 const { handleMcpRequest } = require('./mcp-tools');
 const streaming = require('./services/streaming');
 const vault = require('./services/vault');
@@ -327,6 +328,7 @@ app.get('/v1/cashback/balance/:did', async (req, res) => {
   res.json({ success: true, data: result });
 });
 app.use('/v1/cashback', authMiddleware, cashbackRoutes);
+app.use('/v1/bank/referral', authMiddleware, referralRoutes);
 
 // ─── Agent Transaction Graph routes (auth required) ───────────────────────────
 app.use('/v1/bank/graph', authMiddleware, graphRoutes);
