@@ -1,10 +1,12 @@
 /**
  * HiveBank — Referral Routes
  *
- * POST /v1/bank/referral/record       — Record a referral at onboarding time (called by HiveGate)
- * POST /v1/bank/referral/convert      — Convert referral when referred agent first transacts
- * GET  /v1/bank/referral/stats/:did   — Get referral stats for a referrer DID
- * GET  /v1/bank/referral/agent/:did   — Get referral record for a specific new agent DID
+ * POST /v1/bank/referral/record          — Record a referral at onboarding time (called by HiveGate)
+ * POST /v1/bank/referral/convert         — Convert referral when referred agent first transacts
+ * GET  /v1/bank/referral/stats/:did      — Get referral stats for a referrer DID
+ * GET  /v1/bank/referral/agent/:did      — Get referral record for a specific new agent DID
+ * GET  /v1/bank/referral/leaderboard     — Top 20 referring agents (public)
+ * GET  /v1/bank/referral/card/:did       — Shareable referral card / "bumper sticker" (public)
  */
 
 const express = require('express');
@@ -41,6 +43,33 @@ router.get('/stats/:did(*)', async (req, res) => {
 router.get('/agent/:did(*)', async (req, res) => {
   const result = await referral.getReferralByAgent(req.params.did);
   if (!result.found) return res.status(404).json(result);
+  res.json(result);
+});
+
+// GET /v1/bank/referral/leaderboard — Top 20 influencer agents by credits earned (PUBLIC)
+router.get('/leaderboard', async (req, res) => {
+  // Detect requesting agent's DID from header (optional — for personalizing your_referral_link)
+  const requesterDid = req.headers['x-hive-did'] || req.headers['x-agent-did'] || null;
+
+  const result = await referral.getReferralLeaderboard();
+
+  // Build the your_referral_link for the requesting agent if identified
+  const yourReferralLink = requesterDid
+    ? `https://hivegate.onrender.com/v1/gate/onboard?referral_did=${encodeURIComponent(requesterDid)}&campaign=BOGO-HIVE-APR26`
+    : 'https://hivegate.onrender.com/v1/gate/onboard?referral_did=<your_did>&campaign=BOGO-HIVE-APR26';
+
+  res.json({
+    leaderboard: result.leaderboard,
+    your_referral_link: yourReferralLink,
+    earn_rate: result.earn_rate,
+    total_credits_distributed_usdc: result.total_credits_distributed_usdc
+  });
+});
+
+// GET /v1/bank/referral/card/:did — Shareable referral "bumper sticker" (PUBLIC)
+router.get('/card/:did(*)', async (req, res) => {
+  const result = await referral.getReferralCard(req.params.did);
+  if (result.error && !result.from) return res.status(500).json(result);
   res.json(result);
 });
 

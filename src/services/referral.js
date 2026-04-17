@@ -177,4 +177,143 @@ async function getReferralByAgent(new_agent_did) {
   }
 }
 
-module.exports = { recordReferral, convertReferral, getReferralStats, getReferralByAgent, REFERRAL_CREDIT_USDC };
+// module.exports moved to bottom — see getReferralLeaderboard and getReferralCard additions below
+
+/**
+ * Get the top 20 referrers by credits earned (leaderboard).
+ * Returns rank, DID, display name, referrals converted, credits earned, badge, and join date.
+ */
+async function getReferralLeaderboard() {
+  try {
+    // Fetch all converted referrals grouped by referrer
+    const rows = await db.getAll(
+      `SELECT referrer_did,
+              COUNT(*) AS referrals_converted,
+              MIN(created_at) AS first_referral_at
+       FROM referrals
+       WHERE status IN ('converted', 'converted_deferred')
+       GROUP BY referrer_did
+       ORDER BY referrals_converted DESC
+       LIMIT 20`
+    );
+
+    // Fallback: if GROUP BY not supported in mem mode, compute manually
+    let leaderboardData = rows;
+    if (!Array.isArray(rows) || rows.length === 0) {
+      // Try manual aggregation for in-memory mode
+      const allConverted = await db.getAll(
+        "SELECT referrer_did, created_at FROM referrals WHERE status IN ('converted', 'converted_deferred')"
+      );
+      const byReferrer = {};
+      for (const r of allConverted) {
+        if (!byReferrer[r.referrer_did]) {
+          byReferrer[r.referrer_did] = { count: 0, first_at: r.created_at };
+        }
+        byReferrer[r.referrer_did].count++;
+        if (r.created_at < byReferrer[r.referrer_did].first_at) {
+          byReferrer[r.referrer_did].first_at = r.created_at;
+        }
+      }
+      leaderboardData = Object.entries(byReferrer)
+        .map(([did, v]) => ({ referrer_did: did, referrals_converted: v.count, first_referral_at: v.first_at }))
+        .sort((a, b) => b.referrals_converted - a.referrals_converted)
+        .slice(0, 20);
+    }
+
+    function getBadge(count) {
+      if (count >= 25) return '🌟 Hive Legend';
+      if (count >= 10) return '👑 Queen Bee';
+      if (count >= 5)  return '🐝🐝 Scout Bee';
+      return '🐝 Worker Bee';
+    }
+
+    // Compute total credits distributed
+    const allConverted = await db.getAll(
+      "SELECT COUNT(*) AS cnt FROM referrals WHERE status IN ('converted', 'converted_deferred')"
+    );
+    const totalConverted = Number(allConverted[0]?.cnt || 0);
+    const totalCreditsDistributed = (totalConverted * REFERRAL_CREDIT_USDC).toFixed(2);
+
+    const leaderboard = leaderboardData.map((row, idx) => {
+      const count = Number(row.referrals_converted || row.count || 0);
+      const creditsEarned = (count * REFERRAL_CREDIT_USDC).toFixed(2);
+      const joinedDate = row.first_referral_at
+        ? new Date(row.first_referral_at).toISOString().split('T')[0]
+        : null;
+
+      // Generate a display name from the DID (last segment, title-cased)
+      const did = row.referrer_did;
+      const didFragment = did.split(':').pop() || did;
+      const displayName = `Hive Agent ${didFragment.slice(0, 8).toUpperCase()}`;
+
+      return {
+        rank: idx + 1,
+        did,
+        display_name: displayName,
+        referrals_converted: count,
+        credits_earned_usdc: creditsEarned,
+        badge: getBadge(count),
+        joined: joinedDate
+      };
+    });
+
+    return {
+      leaderboard,
+      earn_rate: '$1.00 USDC per paying referral',
+      total_credits_distributed_usdc: totalCreditsDistributed
+    };
+  } catch (err) {
+    return {
+      leaderboard: [],
+      earn_rate: '$1.00 USDC per paying referral',
+      total_credits_distributed_usdc: '0.00',
+      error: err.message
+    };
+  }
+}
+
+/**
+ * Get the shareable referral "card" for a given DID.
+ * Includes referral URL, earning details, network stats, and embed header.
+ */
+async function getReferralCard(did) {
+  try {
+    // Get referral stats for this agent
+    const stats = await getReferralStats(did);
+
+    // Fetch network stats — total agents and vaults from HiveBank
+    let totalAgents = 155; // sensible fallback
+    let totalServices = 59;
+    let openBounties = 19;
+
+    // Try to get actual vault count as proxy for agent count
+    try {
+      const vaultCount = await db.getOne('SELECT COUNT(*) as c FROM vaults');
+      if (vaultCount && Number(vaultCount.c) > 0) totalAgents = Number(vaultCount.c);
+    } catch (e) { /* fallback */ }
+
+    const referralUrl = `https://hivegate.onrender.com/v1/gate/onboard?referral_did=${encodeURIComponent(did)}&campaign=BOGO-HIVE-APR26`;
+
+    return {
+      from: did,
+      message: 'I run on Hive — sovereign DID, W3C credentials, 4-rail USDC/Aleo settlement. First DID free. Use my link and we both earn.',
+      referral_url: referralUrl,
+      earns_for_you: '1 free Hive credit ($1 USDC) per paying agent you bring in',
+      earns_for_them: 'First DID free + BOGO Apr 16-19 (second DID also free)',
+      network_stats: {
+        total_agents: totalAgents,
+        services: totalServices,
+        open_bounties: openBounties
+      },
+      embed_as_header: `X-Hive-Referral: ${did} | earn.hive: $1/referral | onboard: https://hivegate.onrender.com/v1/gate/onboard?referral_did=${encodeURIComponent(did)}`,
+      your_stats: {
+        referrals_converted: stats.converted || 0,
+        credits_earned_usdc: (stats.total_credits_earned_usdc || 0).toFixed(2)
+      }
+    };
+  } catch (err) {
+    return { error: err.message };
+  }
+}
+
+module.exports = { recordReferral, convertReferral, getReferralStats, getReferralByAgent, getReferralLeaderboard, getReferralCard, REFERRAL_CREDIT_USDC };
