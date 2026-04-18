@@ -440,55 +440,26 @@ app.use('/v1/bank/compliance', complianceRoutes);
 // Velocity Doctrine — discovery & onboarding endpoints
 
 // GET /.well-known/hive-pulse.json — live economy stats from DB
-app.get('/.well-known/hive-pulse.json', async (req, res) => {
-  let vaultCount = 0, totalDeposits = 0, cashbackAccounts = 0, cashbackEarned = 0, bondCount = 0, bondTVL = 0;
-  try {
-    const v = await db.getOne('SELECT COUNT(*) as c, COALESCE(SUM(balance_usdc),0) as t FROM vaults');
-    vaultCount = Number(v?.c || 0); totalDeposits = Number(v?.t || 0);
-  } catch(e) {}
-  try {
-    const c = await db.getOne('SELECT COUNT(*) as c, COALESCE(SUM(total_earned_usdc),0) as t FROM cashback_accounts');
-    cashbackAccounts = Number(c?.c || 0); cashbackEarned = Number(c?.t || 0);
-  } catch(e) {}
-  try {
-    const b = await db.getOne("SELECT COUNT(*) as c, COALESCE(SUM(amount_usdc),0) as t FROM bonds WHERE status = 'active'");
-    bondCount = Number(b?.c || 0); bondTVL = Number(b?.t || 0);
-  } catch(e) {}
-
+app.get('/.well-known/hive-pulse.json', (req, res) => {
+  res.set('Cache-Control', 'public, max-age=60');
   res.json({
+    hps_version: '1.0',
     timestamp: new Date().toISOString(),
-    civilization: "Hive",
-    version: "1.0",
-    service: "HiveBank",
-    role: "Agent Treasury — vaults, streaming payments, credit lines, bonds, cashback, multi-rail routing",
+    service: 'hivebank',
+    network: 'https://www.thehiveryiq.com',
     economy: {
-      total_vaults: vaultCount,
-      total_deposits_usdc: +totalDeposits.toFixed(2),
-      cashback_accounts: cashbackAccounts,
-      total_cashback_earned_usdc: +cashbackEarned.toFixed(2),
-      active_bonds: bondCount,
-      bond_tvl_usdc: +bondTVL.toFixed(2),
-      cashback_rate: "10% on every paid API call"
-    },
-    grid: {
-      rails_available: 4,
-      grid_endpoint: "https://hivebank.onrender.com/v1/grid/route",
-      rails: ["usdc_base_l2", "usdcx_aleo_zk", "usad_aleo_zk", "aleo_native"],
-      routing_fee_pct: 0.0005
+      open_bounties_url: 'https://hiveforge-lhu4.onrender.com/v1/bounties',
+      pulse_url: 'https://hiveforge-lhu4.onrender.com/.well-known/hive-pulse.json',
     },
     join: {
       welcome_bounty_usdc: 1.00,
-      ritz_credits_usdc: 3.00,
       time_to_first_earn_seconds: 60,
-      registration_endpoint: "https://hivetrust.onrender.com/v1/register",
-      mint_endpoint: "https://hiveforge-lhu4.onrender.com/v1/forge/mint",
-      free_mint: true
+      register: 'https://hivegate.onrender.com/v1/gate/onboard',
+      sdk: 'pip install hive-civilization-sdk'
     },
-    services: {
-      hivetrust: "https://hivetrust.onrender.com",
-      hiveforge: "https://hiveforge-lhu4.onrender.com",
-      hivebank: "https://hivebank.onrender.com",
-      hiveclear: "https://hiveclear.onrender.com"
+    pheromones: {
+      strongest: 'construction_compliance',
+      yield: 0.94
     }
   });
 });
