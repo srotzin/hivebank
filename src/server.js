@@ -10,6 +10,8 @@ const perfCreditRoutes = require('./routes/perf-credit');
 const bondsRoutes = require('./routes/bonds');
 const cashbackRoutes = require('./routes/cashback');
 const referralRoutes = require('./routes/referral');
+const treasuryRoutes = require('./routes/treasury');
+const hivegridRoutes  = require('./routes/hivegrid');
 const { handleMcpRequest } = require('./mcp-tools');
 const streaming = require('./services/streaming');
 const vault = require('./services/vault');
@@ -158,6 +160,20 @@ app.get('/', (req, res) => {
         rails: { method: 'GET', path: '/v1/bank/settlement-rails', description: 'Four settlement rails: USDC/Base-L2 (public), USDCx/Aleo (ZK-private amounts), USAD/Aleo+Paxos (ZK-private amounts AND addresses — full anonymity), ALEO-native (pure ZK)' },
         settle: { method: 'POST', path: '/v1/bank/settle', description: 'Execute settlement on any rail. USAD: stealth mode — from_did optional, ephemeral ZK commitment, no on-chain trace.' },
         stealth_path: { method: 'GET', path: '/v1/bank/settle/stealth-path', description: 'Step-by-step guide: how passive-observation agents settle anonymously via USAD without registering a DID.' }
+      },
+      treasury: {
+        vault_yield: { method: 'POST', path: '/v1/bank/vault/yield', description: 'Simulate yield accrual (4-8% APY) on a vault — platform takes 15% of yield' },
+        delegate: { method: 'POST', path: '/v1/bank/delegate', description: 'Create a budget delegation rule for an agent' },
+        delegate_check: { method: 'POST', path: '/v1/bank/delegate/check', description: 'Check if a delegation rule allows a specific transaction' },
+        stream_start: { method: 'POST', path: '/v1/bank/stream/start', description: 'Start a per-second payment stream (treasury primitive)' },
+        stream_status: { method: 'GET', path: '/v1/bank/stream/treasury/{stream_id}', description: 'Get treasury stream status: elapsed, accrued, fees' },
+        credit: { method: 'POST', path: '/v1/bank/treasury/credit', description: "Credit a DID's in-memory ledger (welcome bounty, ad-hoc credits)" }
+      },
+      hivegrid: {
+        route: { method: 'POST', path: '/v1/grid/route', description: 'Select optimal payment rail: cheapest, fastest, or most_compliant' },
+        execute: { method: 'POST', path: '/v1/grid/execute', description: 'Execute a pending route — simulates settlement and returns tx hash' },
+        rails: { method: 'GET', path: '/v1/grid/rails', description: 'List all 4 rails with fees, speed, compliance levels' },
+        stats: { method: 'GET', path: '/v1/grid/stats', description: 'Aggregate routing stats: volume, tx count, rail distribution, fees' }
       },
       referral: {
         record: { method: 'POST', path: '/v1/bank/referral/record', auth: true, description: 'Record a referral at onboarding time (called by HiveGate)' },
@@ -404,6 +420,14 @@ app.get('/v1/bank/referral/card/:did(*)', async (req, res) => {
 // All other referral routes require auth
 app.use('/v1/bank/referral', authMiddleware, referralRoutes);
 
+// ─── Treasury primitives (yield / delegation / payment-stream / credit) ────────
+// Mount treasury router at /v1/bank — handles /vault/yield, /delegate, /delegate/check,
+// /stream/start, /stream/:stream_id, /credit
+app.use('/v1/bank', authMiddleware, treasuryRoutes);
+
+// ─── HiveGrid multi-rail payment routing ─────────────────────────────────────
+app.use('/v1/grid', hivegridRoutes);
+
 // ─── Agent Transaction Graph routes (auth required) ───────────────────────────
 app.use('/v1/bank/graph', authMiddleware, graphRoutes);
 
@@ -436,7 +460,7 @@ app.get('/.well-known/hive-pulse.json', async (req, res) => {
     civilization: "Hive",
     version: "1.0",
     service: "HiveBank",
-    role: "Agent Treasury — vaults, streaming payments, credit lines, bonds, cashback",
+    role: "Agent Treasury — vaults, streaming payments, credit lines, bonds, cashback, multi-rail routing",
     economy: {
       total_vaults: vaultCount,
       total_deposits_usdc: +totalDeposits.toFixed(2),
@@ -445,6 +469,12 @@ app.get('/.well-known/hive-pulse.json', async (req, res) => {
       active_bonds: bondCount,
       bond_tvl_usdc: +bondTVL.toFixed(2),
       cashback_rate: "10% on every paid API call"
+    },
+    grid: {
+      rails_available: 4,
+      grid_endpoint: "https://hivebank.onrender.com/v1/grid/route",
+      rails: ["usdc_base_l2", "usdcx_aleo_zk", "usad_aleo_zk", "aleo_native"],
+      routing_fee_pct: 0.0005
     },
     join: {
       welcome_bounty_usdc: 1.00,
