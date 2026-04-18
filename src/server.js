@@ -549,6 +549,26 @@ setInterval(async () => {
   }
 }, TWENTY_FOUR_HOURS);
 
+
+// ─── Keep-alive: prevent Render free-tier cold starts ────────────────
+const HIVEBANK_KEEPALIVE = [
+  'https://hivebank.onrender.com/health',
+  'https://hivegate.onrender.com/health',
+  'https://hiveexchange-service.onrender.com/health',
+];
+setInterval(async () => {
+  for (const url of HIVEBANK_KEEPALIVE) {
+    try {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 15000);
+      await fetch(url, { signal: ctrl.signal });
+      clearTimeout(t);
+    } catch {
+      // Silent
+    }
+  }
+}, 10 * 60 * 1000);
+
 // Async startup: initialize DB schema, seed data, then listen
 async function start() {
   await db.initialize();
