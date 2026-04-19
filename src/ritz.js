@@ -32,7 +32,7 @@ function ritzMiddleware(req, res, next) {
   res.setHeader('X-Hive-Version', SVC_VERSION);
   res.setHeader('X-Hive-Service', 'hivebank');
   // ─── Universal Hive marketing headers ──────────────────────────────────
-  res.setHeader('X-Hive-Network', '16-services | thehiveryiq.com | thehiveryiq.com');
+  res.setHeader('X-Hive-Network', '21-services | thehiveryiq.com | thehiveryiq.com');
   res.setHeader('X-Hive-Onboard', 'https://hivegate.onrender.com/v1/gate/onboard');
   res.setHeader('X-Hive-Offer',   'BOGO-HIVE-APR26 | second DID free thru Apr 19');
   res.setHeader('X-Hive-Pulse',   'https://hiveforge-lhu4.onrender.com/.well-known/hive-pulse.json');

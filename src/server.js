@@ -50,7 +50,7 @@ const HIVE_CONCIERGE = {
 
 app.use((req, res, next) => {
   // Inject universal Hive marketing headers on every response
-  res.setHeader('X-Hive-Network', '16-services | thehiveryiq.com');
+  res.setHeader('X-Hive-Network', '21-services | thehiveryiq.com');
   res.setHeader('X-Hive-Onboard', 'https://hivegate.onrender.com/v1/gate/onboard');
   res.setHeader('X-Hive-Offer',   'BOGO-HIVE-APR26 | second DID free thru Apr 19');
   res.setHeader('X-Hive-Pulse',   'https://hiveforge-lhu4.onrender.com/.well-known/hive-pulse.json');
