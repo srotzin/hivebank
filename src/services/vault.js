@@ -2,24 +2,39 @@ const { v4: uuidv4 } = require('uuid');
 const db = require('./db');
 const referral = require('./referral');
 
-async function createVault(did) {
+async function createVault(did, evm_address = null) {
   const existing = await db.getOne('SELECT * FROM vaults WHERE did = $1', [did]);
   if (existing) {
+    // Update evm_address if newly provided
+    if (evm_address && !existing.evm_address) {
+      await db.run('UPDATE vaults SET evm_address = $1 WHERE did = $2', [evm_address, did]).catch(() => {});
+    }
     return { error: 'Vault already exists for this DID', vault_id: existing.vault_id };
   }
 
   const vault_id = `vault_${uuidv4().replace(/-/g, '').slice(0, 16)}`;
   const now = new Date().toISOString();
 
-  await db.run(`
-    INSERT INTO vaults (vault_id, did, balance_usdc, total_deposited_usdc, total_withdrawn_usdc,
-      yield_earned_usdc, platform_yield_fee_usdc, yield_rate_apy, created_at, last_yield_accrual)
-    VALUES ($1, $2, 0, 0, 0, 0, 0, 0.06, $3, $4)
-  `, [vault_id, did, now, now]);
+  // Try with evm_address column first, fall back if column doesn't exist yet
+  try {
+    await db.run(`
+      INSERT INTO vaults (vault_id, did, balance_usdc, total_deposited_usdc, total_withdrawn_usdc,
+        yield_earned_usdc, platform_yield_fee_usdc, yield_rate_apy, evm_address, created_at, last_yield_accrual)
+      VALUES ($1, $2, 0, 0, 0, 0, 0, 0.06, $3, $4, $5)
+    `, [vault_id, did, evm_address, now, now]);
+  } catch (e) {
+    // Column may not exist yet — insert without it
+    await db.run(`
+      INSERT INTO vaults (vault_id, did, balance_usdc, total_deposited_usdc, total_withdrawn_usdc,
+        yield_earned_usdc, platform_yield_fee_usdc, yield_rate_apy, created_at, last_yield_accrual)
+      VALUES ($1, $2, 0, 0, 0, 0, 0, 0.06, $3, $4)
+    `, [vault_id, did, now, now]);
+  }
 
   return {
     vault_id,
     did,
+    evm_address,
     balance_usdc: 0,
     yield_rate_apy: 0.06,
     created_at: now

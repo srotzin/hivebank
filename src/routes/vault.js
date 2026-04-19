@@ -3,10 +3,11 @@ const router = express.Router();
 const vault = require('../services/vault');
 
 router.post('/create', async (req, res) => {
-  const { did } = req.body;
+  const { did, wallet_address, evm_address } = req.body;
   if (!did) return res.status(400).json({ error: 'did is required' });
 
-  const result = await vault.createVault(did);
+  const evmAddr = evm_address || wallet_address || null;
+  const result = await vault.createVault(did, evmAddr);
   if (result.error) return res.status(409).json(result);
   res.status(201).json(result);
 });
