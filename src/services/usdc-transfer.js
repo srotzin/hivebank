@@ -19,6 +19,11 @@ const https  = require('https');
 const API_KEY_NAME    = process.env.COINBASE_API_KEY_NAME;  // organizations/xxx/apiKeys/xxx format
 const WALLET_SECRET   = process.env.COINBASE_WALLET_SECRET;  // EC PRIVATE KEY PEM
 
+// ─── Emergency circuit breaker ────────────────────────────────────────────────
+// Set USDC_SENDS_PAUSED=true in Render env to halt all live USDC transfers
+// while persistent DB is being wired up. Remove env var to re-enable.
+const SENDS_PAUSED = process.env.USDC_SENDS_PAUSED === 'true';
+
 const CB_HOST = 'api.coinbase.com';
 
 // ─── Circuit breaker — rate limit sends per address ───────────────────────
@@ -161,6 +166,11 @@ async function checkUSDCBalance() {
 
 // ─── Send USDC via Coinbase API ───────────────────────────────────────────────
 async function sendUSDC(toAddress, amountUsdc, opts = {}) {
+  if (SENDS_PAUSED) {
+    console.warn('[usdc-transfer] PAUSED — USDC_SENDS_PAUSED=true. Transfer queued but not sent:', toAddress, amountUsdc);
+    return { ok: false, skipped: true, paused: true, reason: 'USDC sends paused — persistent DB migration in progress. Payment will be honoured once DB is live.', amount_usdc: amountUsdc, to: toAddress };
+  }
+
   if (!API_KEY_NAME || !WALLET_SECRET) {
     console.warn('[usdc-transfer] Coinbase env vars not set — transfer skipped (DB-only mode)');
     return { ok: false, skipped: true, reason: 'Coinbase API credentials not configured', amount_usdc: amountUsdc, to: toAddress };
