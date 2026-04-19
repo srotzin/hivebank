@@ -21,6 +21,49 @@ const WALLET_SECRET   = process.env.COINBASE_WALLET_SECRET;  // EC PRIVATE KEY P
 
 const CB_HOST = 'api.coinbase.com';
 
+// ─── Circuit breaker — rate limit sends per address ───────────────────────
+// Max $10 USDC per address per hour, max $50 total per hour across all addresses
+const MAX_PER_ADDRESS_PER_HOUR = 10.00;
+const MAX_TOTAL_PER_HOUR = 50.00;
+const sendLedger = new Map(); // address → { total, window_start }
+let hourlyTotal = 0;
+let hourlyWindowStart = Date.now();
+
+function checkRateLimit(toAddress, amount) {
+  const now = Date.now();
+  const oneHour = 60 * 60 * 1000;
+
+  // Reset hourly window
+  if (now - hourlyWindowStart > oneHour) {
+    hourlyTotal = 0;
+    hourlyWindowStart = now;
+    sendLedger.clear();
+  }
+
+  // Check per-address limit
+  const addrRecord = sendLedger.get(toAddress) || { total: 0, window_start: now };
+  if (now - addrRecord.window_start > oneHour) {
+    addrRecord.total = 0;
+    addrRecord.window_start = now;
+  }
+  if (addrRecord.total + amount > MAX_PER_ADDRESS_PER_HOUR) {
+    return { allowed: false, reason: `Rate limit: max $${MAX_PER_ADDRESS_PER_HOUR} USDC/hour per address` };
+  }
+
+  // Check global hourly limit
+  if (hourlyTotal + amount > MAX_TOTAL_PER_HOUR) {
+    return { allowed: false, reason: `Rate limit: max $${MAX_TOTAL_PER_HOUR} USDC/hour total` };
+  }
+
+  return { allowed: true, addrRecord };
+}
+
+function recordSend(toAddress, amount, addrRecord) {
+  addrRecord.total += amount;
+  sendLedger.set(toAddress, addrRecord);
+  hourlyTotal += amount;
+}
+
 // ─── Build JWT for Coinbase Advanced API (ES256 / EC key) ───────────────────
 function buildJWT(method, path) {
   if (!API_KEY_NAME || !WALLET_SECRET) return null;
@@ -127,6 +170,13 @@ async function sendUSDC(toAddress, amountUsdc, opts = {}) {
     return { ok: false, error: 'Invalid address or amount' };
   }
 
+  // Rate limit check
+  const rateCheck = checkRateLimit(toAddress, amountUsdc);
+  if (!rateCheck.allowed) {
+    console.warn(`[usdc-transfer] Rate limit blocked: ${toAddress} ${amountUsdc} USDC — ${rateCheck.reason}`);
+    return { ok: false, error: rateCheck.reason, rate_limited: true };
+  }
+
   try {
     // Get USDC account UUID
     const balResp = await checkUSDCBalance();
@@ -157,6 +207,7 @@ async function sendUSDC(toAddress, amountUsdc, opts = {}) {
     if (resp.status === 200 || resp.status === 201) {
       const tx = resp.body.data || resp.body;
       console.log(`[usdc-transfer] Success — tx id: ${tx.id}`);
+      recordSend(toAddress, sendAmount, rateCheck.addrRecord);
       return {
         ok: true,
         tx_hash: tx.network?.hash || tx.id,

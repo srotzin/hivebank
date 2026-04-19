@@ -13,8 +13,20 @@ const express = require('express');
 const router = express.Router();
 const referral = require('../services/referral');
 
-// POST /v1/bank/referral/record — Called by HiveGate at onboarding
-router.post('/record', async (req, res) => {
+// Internal-only guard — convert and record can only be called by Hive services
+const INTERNAL_KEY = process.env.HIVE_INTERNAL_KEY ||
+  'hive_internal_125e04e071e8829be631ea0216dd4a0c9b707975fcecaf8c62c6a2ab43327d46';
+
+function requireInternal(req, res, next) {
+  const key = req.headers['x-hive-internal'];
+  if (!key || key !== INTERNAL_KEY) {
+    return res.status(403).json({ error: 'Forbidden — internal service call required' });
+  }
+  next();
+}
+
+// POST /v1/bank/referral/record — Called by HiveGate at onboarding (INTERNAL ONLY)
+router.post('/record', requireInternal, async (req, res) => {
   const { new_agent_did, referrer_did } = req.body;
   if (!new_agent_did || !referrer_did) {
     return res.status(400).json({ error: 'new_agent_did and referrer_did are required' });
@@ -24,8 +36,8 @@ router.post('/record', async (req, res) => {
   res.status(201).json(result);
 });
 
-// POST /v1/bank/referral/convert — Mark referral converted + issue credit
-router.post('/convert', async (req, res) => {
+// POST /v1/bank/referral/convert — Mark referral converted + issue $1 USDC (INTERNAL ONLY)
+router.post('/convert', requireInternal, async (req, res) => {
   const { new_agent_did } = req.body;
   if (!new_agent_did) return res.status(400).json({ error: 'new_agent_did is required' });
 
