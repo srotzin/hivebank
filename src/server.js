@@ -23,6 +23,7 @@ const db = require('./services/db');
 const graphRoutes       = require('./routes/graph');
 const complianceRoutes  = require('./routes/compliance');
 const settlementRoutes  = require('./routes/settlement');
+const usdcRoutes        = require('./routes/usdc');
 const { seedGraph } = require('./services/seed');
 
 const app = express();
@@ -436,6 +437,9 @@ app.use('/v1/bank', settlementRoutes);
 
 // ─── Compliance routes (public — no auth required) ────────────────────────────
 app.use('/v1/bank/compliance', complianceRoutes);
+
+// ─── USDC on-chain transfer routes (internal auth via x-hive-internal) ────────
+app.use('/v1/bank/usdc', usdcRoutes);
 
 // Velocity Doctrine — discovery & onboarding endpoints
 

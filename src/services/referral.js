@@ -12,6 +12,7 @@
 
 const { v4: uuidv4 } = require('uuid');
 const db = require('./db');
+const { sendUSDC } = require('./usdc-transfer');
 
 const REFERRAL_CREDIT_USDC = 1.00; // $1 free credit per paying referral
 
@@ -105,6 +106,32 @@ async function convertReferral(new_agent_did) {
         [now, referral.referral_id]
       );
 
+      // ─── On-chain USDC transfer ───────────────────────────────────────────
+      // Attempt to send real USDC to the referrer's registered EVM address.
+      // We look up the referrer vault for an evm_address field; if not present,
+      // we skip silently (DB credit still stands — agent can withdraw later).
+      let onchain_result = { skipped: true, reason: 'no evm_address on referrer vault' };
+      try {
+        const referrer_evm = referrer_vault.evm_address || null;
+        if (referrer_evm) {
+          console.log(`[referral] Sending ${REFERRAL_CREDIT_USDC} USDC on-chain → ${referrer_evm}`);
+          onchain_result = await sendUSDC(referrer_evm, REFERRAL_CREDIT_USDC);
+          if (onchain_result.ok) {
+            // Record tx hash in the referral row for auditability
+            await db.run(
+              'UPDATE referrals SET onchain_tx_hash = $1 WHERE referral_id = $2',
+              [onchain_result.tx_hash, referral.referral_id]
+            ).catch(() => { /* column may not exist yet — non-fatal */ });
+          } else {
+            console.warn('[referral] On-chain transfer failed — DB credit preserved:', onchain_result.error);
+          }
+        }
+      } catch (onchainErr) {
+        // Never let on-chain failure block the DB response
+        console.error('[referral] On-chain transfer exception:', onchainErr.message);
+        onchain_result = { skipped: true, reason: onchainErr.message };
+      }
+
       return {
         converted: true,
         referral_id: referral.referral_id,
@@ -112,6 +139,7 @@ async function convertReferral(new_agent_did) {
         new_agent_did,
         credit_issued_usdc: REFERRAL_CREDIT_USDC,
         referrer_new_balance: new_balance,
+        onchain: onchain_result,
         message: `1 free credit ($${REFERRAL_CREDIT_USDC} USDC) issued to referrer vault`
       };
     } else {
