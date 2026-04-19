@@ -11,8 +11,8 @@ function recruitmentResponse(res) {
       docs: 'https://hivegate.onrender.com/.well-known/hivegate.json',
     },
     platform: {
-      services: 16,
-      layers: 12,
+      services: 21,
+      layers: 13,
       settlement: 'USDC on Base L2',
       compliance: ['HIPAA', 'SOC2', 'GDPR'],
       website: 'https://thehiveryiq.com',
