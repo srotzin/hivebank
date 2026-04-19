@@ -54,7 +54,7 @@ function buildJWT(method, path) {
 }
 
 // ─── Generic Coinbase API call ────────────────────────────────────────────────
-function cbRequest(method, path, body = null) {
+function cbRequest(method, path, body = null, extraHeaders = {}) {
   return new Promise((resolve, reject) => {
     const jwt = buildJWT(method, path);
     const bodyStr = body ? JSON.stringify(body) : null;
@@ -66,7 +66,7 @@ function cbRequest(method, path, body = null) {
       headers: {
         'Authorization': `Bearer ${jwt}`,
         'Content-Type': 'application/json',
-        'Accept': 'application/json',
+        'Accept': 'application/json', ...extraHeaders,
       },
     };
     if (bodyStr) options.headers['Content-Length'] = Buffer.byteLength(bodyStr);
@@ -138,29 +138,30 @@ async function sendUSDC(toAddress, amountUsdc, opts = {}) {
     const account_uuid = balResp.account_uuid;
     if (!account_uuid) return { ok: false, error: 'USDC account not found on Coinbase' };
 
-    // Send transaction
-    const idem = `hive-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    // Coinbase minimum send is 1 USDC
+    const sendAmount = Math.max(amountUsdc, 1.00);
+
+    // Send via Coinbase v2 API
     const body = {
       type: 'send',
       to: toAddress,
-      amount: amountUsdc.toFixed(6),
+      amount: sendAmount.toFixed(2),
       currency: 'USDC',
       network: 'base',
-      idem, // idempotency key
       description: opts.reason || 'Hive referral credit',
     };
 
-    console.log(`[usdc-transfer] Sending ${amountUsdc} USDC → ${toAddress} via Coinbase API`);
-    const resp = await cbRequest('POST', `/api/v3/brokerage/accounts/${account_uuid}/transactions`, body);
+    console.log(`[usdc-transfer] Sending ${sendAmount} USDC → ${toAddress} via Coinbase API`);
+    const resp = await cbRequest('POST', `/v2/accounts/${account_uuid}/transactions`, body, { 'CB-VERSION': '2016-02-18' });
 
     if (resp.status === 200 || resp.status === 201) {
-      const tx = resp.body.transaction || resp.body;
-      console.log(`[usdc-transfer] Success — tx id: ${tx.id || tx.transaction_id}`);
+      const tx = resp.body.data || resp.body;
+      console.log(`[usdc-transfer] Success — tx id: ${tx.id}`);
       return {
         ok: true,
-        tx_hash: tx.network?.hash || tx.id || idem,
+        tx_hash: tx.network?.hash || tx.id,
         tx_id: tx.id,
-        amount_usdc: amountUsdc,
+        amount_usdc: sendAmount,
         to: toAddress,
         network: 'base',
         source: 'coinbase_api',
@@ -168,7 +169,7 @@ async function sendUSDC(toAddress, amountUsdc, opts = {}) {
       };
     } else {
       console.error('[usdc-transfer] Coinbase send failed:', resp.body);
-      return { ok: false, error: `Coinbase API ${resp.status}`, detail: resp.body, amount_usdc: amountUsdc, to: toAddress };
+      return { ok: false, error: `Coinbase API ${resp.status}`, detail: resp.body, amount_usdc: sendAmount, to: toAddress };
     }
   } catch (err) {
     console.error('[usdc-transfer] Exception:', err.message);
