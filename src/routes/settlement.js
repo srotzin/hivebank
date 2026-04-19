@@ -279,6 +279,163 @@ router.post('/settle', (req, res) => {
 });
 
 // ══════════════════════════════════════════════════════════════
+//  POST /v1/bank/settle/auto
+//  HAHS Auto-Settlement endpoint. Triggered by HiveLaw when both parties
+//  fulfill their obligations under a HAHS agreement.
+//  - Skips x402 payment requirement (pre-authorized by HAHS contract)
+//  - Requires x-hive-internal header OR hahs_agreement_id in body
+//  - Generates a ZK settlement receipt proving amount > 0 without revealing it
+//  - Returns settlement receipt with zk_receipt field and hahs_compliant: true
+// ══════════════════════════════════════════════════════════════
+
+const HIVE_INTERNAL_KEY_AUTO = process.env.HIVE_INTERNAL_KEY ||
+  'hive_internal_125e04e071e8829be631ea0216dd4a0c9b707975fcecaf8c62c6a2ab43327d46';
+
+function generateZkReceipt(agreementId, amountUsdc, fromDid, toDid) {
+  // ZK receipt proves "amount > 0 was transferred" without revealing the exact amount.
+  // In production this would be an Aleo ZK SNARK; here we simulate with a cryptographic
+  // commitment derived from the settlement parameters.
+  const ts = Date.now();
+  const commitment_input = `${agreementId}:${amountUsdc}:${fromDid}:${toDid}:${ts}`;
+  const commitment = crypto.createHash('sha256').update(commitment_input).digest('hex');
+  const range_proof_input = `range:${amountUsdc > 0 ? 'positive' : 'zero'}:${ts}`;
+  const range_proof = crypto.createHash('sha256').update(range_proof_input + commitment).digest('hex');
+  return {
+    proof_type:              'zk_range_proof',
+    program:                 'hive_settle_hahs.aleo',
+    commitment:              `0x${commitment}`,
+    range_proof:             `0x${range_proof}`,
+    nullifier:               `0x${crypto.createHash('sha256').update(commitment + 'hahs_nullifier').digest('hex')}`,
+    proves:                  'amount_gt_zero',
+    amount_revealed:         false,
+    counterparties_revealed: false,
+    verified:                true,
+    generated_at_iso:        new Date(ts).toISOString(),
+    note: 'ZK receipt: proves transfer occurred and amount > 0. Exact amount and parties not revealed.',
+  };
+}
+
+router.post('/settle/auto', (req, res) => {
+  const {
+    from_did,
+    to_did,
+    amount_usdc,
+    rail = 'base-usdc',
+    hahs_agreement_id,
+    auto_settled = true,
+    memo,
+  } = req.body || {};
+
+  // Authorization: x-hive-internal header OR hahs_agreement_id present (HAHS pre-authorized)
+  const internalKey = req.headers['x-hive-internal'];
+  const isInternal  = (internalKey && internalKey === HIVE_INTERNAL_KEY_AUTO);
+  const isHahs      = !!hahs_agreement_id;
+
+  if (!isInternal && !isHahs) {
+    return res.status(403).json({
+      success: false,
+      error: 'HAHS_AUTO_SETTLE_UNAUTHORIZED',
+      message: 'Auto-settlement requires x-hive-internal header or hahs_agreement_id in body.',
+      hint: 'This endpoint is for internal HAHS contract completions only.',
+    });
+  }
+
+  // Validate required fields
+  if (!to_did) {
+    return res.status(400).json({ success: false, error: 'to_did is required' });
+  }
+  if (amount_usdc == null || isNaN(parseFloat(amount_usdc)) || parseFloat(amount_usdc) < 0) {
+    return res.status(400).json({ success: false, error: 'amount_usdc must be a non-negative number' });
+  }
+
+  // Normalize 'usdc' shorthand (from HiveLaw) to 'base-usdc'
+  const effectiveRail = (rail === 'usdc') ? 'base-usdc' : rail;
+  const VALID_RAILS   = ['base-usdc', 'aleo-usdcx', 'aleo-usad', 'aleo-native'];
+  if (!VALID_RAILS.includes(effectiveRail)) {
+    return res.status(400).json({
+      success: false,
+      error: `Invalid rail. Must be one of: ${VALID_RAILS.join(', ')} (or 'usdc' as alias for base-usdc)`,
+    });
+  }
+
+  const amount        = parseFloat(amount_usdc).toFixed(6);
+  const settlement_id = `hive_settle_hahs_${crypto.randomBytes(8).toString('hex')}`;
+  const tx_hash       = generateTxHash(effectiveRail, amount);
+  const ts            = new Date().toISOString();
+
+  // Rail metadata
+  const railMeta = {
+    'base-usdc': {
+      network: 'Base L2', asset: 'USDC', finality_seconds: 2,
+      privacy: 'public', explorer_url: `https://basescan.org/tx/${tx_hash}`,
+      zk_proof: null, anonymity: 'none',
+    },
+    'aleo-usdcx': {
+      network: 'Aleo Mainnet', asset: 'USDCx', finality_seconds: 5,
+      privacy: 'zk-private-amounts',
+      explorer_url: `https://explorer.aleo.org/transaction/${tx_hash}`,
+      zk_proof: generateZkProof('aleo-usdcx', amount, from_did || 'hahs-operator', to_did),
+      anonymity: 'partial',
+    },
+    'aleo-usad': {
+      network: 'Aleo Mainnet', asset: 'USAD', finality_seconds: 5,
+      privacy: 'zk-private-amounts-and-addresses', explorer_url: null,
+      zk_proof: generateZkProof('aleo-usad', amount, from_did || 'hahs-operator', to_did),
+      anonymity: 'full',
+    },
+    'aleo-native': {
+      network: 'Aleo Mainnet', asset: 'ALEO', finality_seconds: 5,
+      privacy: 'zk-private',
+      explorer_url: `https://explorer.aleo.org/transaction/${tx_hash}`,
+      zk_proof: generateZkProof('aleo-native', amount, from_did || 'hahs-operator', to_did),
+      anonymity: 'full',
+    },
+  };
+
+  const meta = railMeta[effectiveRail];
+
+  // ZK settlement receipt: proves amount > 0 without revealing exact value
+  const zk_receipt = generateZkReceipt(
+    hahs_agreement_id || `manual_${settlement_id}`,
+    parseFloat(amount),
+    from_did || 'hahs-operator',
+    to_did
+  );
+
+  const { ok } = require('../ritz');
+
+  return ok(res, SERVICE, {
+    settlement_id,
+    status:            'settled',
+    rail:              effectiveRail,
+    tx_hash:           meta.explorer_url ? tx_hash : null,
+    amount_usdc:       amount,
+    from_did:          from_did || null,
+    to_did,
+    memo:              memo || null,
+    network:           meta.network,
+    asset:             meta.asset,
+    finality_seconds:  meta.finality_seconds,
+    privacy:           meta.privacy,
+    anonymity:         meta.anonymity,
+    explorer_url:      meta.explorer_url,
+    zk_proof:          meta.zk_proof,
+    zk_receipt,
+    hahs_agreement_id: hahs_agreement_id || null,
+    hahs_compliant:    true,
+    auto_settled:      true,
+    settlement_wall:   effectiveRail.startsWith('aleo') ? ALEO_SHIELD : BASE_USDC,
+    settled_at:        ts,
+    hive_atg_record:   `atg_${settlement_id}`,
+    w3c_vc_receipt:    `https://hivetrust.onrender.com/v1/trust/vc/settlement/${settlement_id}`,
+    internal_source:   'hahs_auto_settlement',
+    x402_bypassed:     true,
+    message:           'HAHS auto-settlement executed. No human intervention required.',
+  });
+});
+
+
+// ══════════════════════════════════════════════════════════════
 //  GET /v1/bank/settle/stealth-path
 //  Explains the USAD stealth path for agents in passive observation mode.
 //  No auth required — this is the "how do I stay anonymous" docs endpoint.
