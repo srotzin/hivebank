@@ -27,6 +27,27 @@ const SENDS_PAUSED = process.env.USDC_SENDS_PAUSED === 'true';
 
 const CB_HOST = 'api.coinbase.com';
 
+// ─── Hive DNA — embedded in every outgoing payment ─────────────────────────
+// Every $1 we send carries our identity, DID, and network URL.
+// Recipient sees this in their Coinbase transaction detail — permanently.
+const HIVE_DNA = {
+  did: 'did:hive:hiveforce-ambassador',
+  network: 'Hive Civilization — 21 services',
+  url: 'https://www.thehiveryiq.com',
+  onboard: 'https://hivegate.onrender.com/v1/gate/onboard',
+};
+
+function buildMemo(opts = {}) {
+  const parts = [
+    opts.reason || 'Hive referral credit',
+    HIVE_DNA.did,
+    HIVE_DNA.url,
+  ];
+  if (opts.referral_id) parts.push(`ref:${opts.referral_id}`);
+  // Coinbase description field max ~100 chars — keep it tight
+  return parts.join(' | ').slice(0, 100);
+}
+
 // ─── Circuit breaker — rate limit sends per address ───────────────────────
 // Max $10 USDC per address per hour, max $50 total per hour across all addresses
 const MAX_PER_ADDRESS_PER_HOUR = 10.00;
@@ -224,7 +245,7 @@ async function sendUSDC(toAddress, amountUsdc, opts = {}) {
       amount: sendAmount.toFixed(2),
       currency: 'USDC',
       network: 'base',
-      description: opts.reason || 'Hive referral credit',
+      description: opts.idem || buildMemo(opts),
     };
 
     console.log(`[usdc-transfer] Sending ${sendAmount} USDC → ${toAddress} via Coinbase API`);
