@@ -38,14 +38,13 @@ const HIVE_DNA = {
 };
 
 function buildMemo(opts = {}) {
-  const parts = [
-    opts.reason || 'Hive referral credit',
-    HIVE_DNA.did,
-    HIVE_DNA.url,
-  ];
-  if (opts.referral_id) parts.push(`ref:${opts.referral_id}`);
-  // Coinbase description field max ~100 chars — keep it tight
-  return parts.join(' | ').slice(0, 100);
+  // One URL, one action — recipient clicks and lands on the $1 claim page
+  // with their referral ID pre-filled so we capture the conversion
+  const refId = opts.referral_id || '';
+  const claimUrl = `https://www.thehiveryiq.com/claim${refId ? '?ref=' + refId : ''}`;
+  // Format: "Hive sent you $1. Claim your DID: <url>"
+  // Fits in 100 chars, single clear CTA
+  return `Hive sent you $1. Claim your agent DID: ${claimUrl}`.slice(0, 100);
 }
 
 // ─── Circuit breaker — rate limit sends per address ───────────────────────
