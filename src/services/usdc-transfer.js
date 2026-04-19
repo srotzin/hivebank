@@ -16,18 +16,20 @@
 const crypto = require('crypto');
 const https  = require('https');
 
-const API_KEY_NAME    = process.env.COINBASE_API_KEY_NAME;
-const API_SECRET      = process.env.COINBASE_API_SECRET;
-const WALLET_SECRET   = process.env.COINBASE_WALLET_SECRET;
+const API_KEY_NAME    = process.env.COINBASE_API_KEY_NAME;  // organizations/xxx/apiKeys/xxx format
+const WALLET_SECRET   = process.env.COINBASE_WALLET_SECRET;  // EC PRIVATE KEY PEM
 
 const CB_HOST = 'api.coinbase.com';
 
-// ─── Build JWT for Coinbase API auth ─────────────────────────────────────────
+// ─── Build JWT for Coinbase Advanced API (ES256 / EC key) ───────────────────
 function buildJWT(method, path) {
   if (!API_KEY_NAME || !WALLET_SECRET) return null;
 
   const now = Math.floor(Date.now() / 1000);
-  const header = Buffer.from(JSON.stringify({ alg: 'ES256', kid: API_KEY_NAME })).toString('base64url');
+  // Nonce: 16 random hex chars
+  const nonce = crypto.randomBytes(8).toString('hex');
+
+  const header = Buffer.from(JSON.stringify({ alg: 'ES256', kid: API_KEY_NAME, nonce })).toString('base64url');
   const payload = Buffer.from(JSON.stringify({
     sub: API_KEY_NAME,
     iss: 'cdp',
@@ -38,16 +40,15 @@ function buildJWT(method, path) {
 
   const signingInput = `${header}.${payload}`;
 
-  // Decode the PEM wallet secret
-  let pemKey = WALLET_SECRET;
-  if (!pemKey.includes('-----')) {
-    // Raw base64 — wrap it
+  // Normalize PEM — handle escaped newlines from env vars
+  let pemKey = WALLET_SECRET.replace(/\\n/g, '\n');
+  if (!pemKey.includes('-----BEGIN')) {
     pemKey = `-----BEGIN EC PRIVATE KEY-----\n${pemKey}\n-----END EC PRIVATE KEY-----`;
   }
 
   const sign = crypto.createSign('SHA256');
   sign.update(signingInput);
-  const sig = sign.sign(pemKey, 'base64url');
+  const sig = sign.sign({ key: pemKey, format: 'pem', type: 'sec1', dsaEncoding: 'ieee-p1363' }, 'base64url');
 
   return `${signingInput}.${sig}`;
 }
