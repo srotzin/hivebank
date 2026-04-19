@@ -25,7 +25,8 @@ function memInit() {
     cashback_accounts: [],
     cashback_transactions: [],
     referrals: [],
-    usdc_sends: []
+    usdc_sends: [],
+    rewards: []
   };
   console.log('[HiveBank] DATABASE_URL not set — using in-memory store (data resets on restart)');
 }
@@ -77,8 +78,8 @@ function memQuery(text, params = []) {
       const cols = colMatch[1].split(',').map(c => c.trim());
       const row = {};
       cols.forEach((col, i) => { row[col] = params[i] !== undefined ? params[i] : null; });
-      // Auto-increment SERIAL id for usdc_sends
-      if (tableName === 'usdc_sends' && row.id === null) {
+      // Auto-increment SERIAL id for usdc_sends and rewards
+      if ((tableName === 'usdc_sends' || tableName === 'rewards') && row.id === null) {
         const maxId = table.reduce((m, r) => Math.max(m, Number(r.id) || 0), 0);
         row.id = maxId + 1;
       }
@@ -90,6 +91,12 @@ function memQuery(text, params = []) {
           if (table.some(r => r[firstCol] === row[firstCol])) return { rows: [], rowCount: 0 };
         }
       }
+      // UNIQUE(did, trigger) conflict for rewards table
+      if (tableName === 'rewards' && /ON CONFLICT.*DO NOTHING/i.test(t)) {
+        if (table.some(r => r.did === row.did && r.trigger === row.trigger)) {
+          return { rows: [], rowCount: 0 };
+        }
+      }
       table.push(row);
       return { rows: [row], rowCount: 1 };
     }
@@ -98,13 +105,19 @@ function memQuery(text, params = []) {
 
   // ── SELECT ──────────────────────────────────────────────────────────────────
   if (selectMatch) {
-    // Filter rows by WHERE col = $N
+    // Filter rows by WHERE clause — supports multiple AND conditions
     let rows = [...table];
-    const whereMatch = t.match(/WHERE\s+(\w+)\s*=\s*\$(\d+)/i);
-    if (whereMatch && params[parseInt(whereMatch[2]) - 1] !== undefined) {
-      const col = whereMatch[1];
-      const val = params[parseInt(whereMatch[2]) - 1];
-      rows = rows.filter(r => String(r[col]) === String(val));
+    // Extract all WHERE conditions of the form col = $N
+    const whereSection = t.match(/WHERE\s+(.+?)(?:ORDER BY|LIMIT|$)/is);
+    if (whereSection) {
+      const conditions = [...whereSection[1].matchAll(/(\w+)\s*=\s*\$(\d+)/gi)];
+      for (const cond of conditions) {
+        const col = cond[1];
+        const val = params[parseInt(cond[2]) - 1];
+        if (val !== undefined) {
+          rows = rows.filter(r => String(r[col]) === String(val));
+        }
+      }
     }
 
     // Aggregate functions — COUNT(*), SUM(col), COALESCE(SUM(col), 0)
@@ -392,6 +405,18 @@ const DDL = `
   CREATE INDEX IF NOT EXISTS idx_referrals_status ON referrals(status);
   CREATE INDEX IF NOT EXISTS idx_usdc_sends_address ON usdc_sends(to_address);
   CREATE INDEX IF NOT EXISTS idx_usdc_sends_created ON usdc_sends(created_at);
+
+  CREATE TABLE IF NOT EXISTS rewards (
+    id SERIAL PRIMARY KEY,
+    did TEXT NOT NULL,
+    trigger TEXT NOT NULL,
+    wallet_address TEXT NOT NULL,
+    tx_hash TEXT,
+    claimed_at TEXT NOT NULL,
+    UNIQUE(did, trigger)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_rewards_did ON rewards(did);
 `;
 
 // Migrations: add columns to existing tables (safe — IF NOT EXISTS style via DO block)
