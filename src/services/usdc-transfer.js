@@ -1,180 +1,184 @@
 /**
- * usdc-transfer.js — Real on-chain USDC transfer on Base L2
+ * usdc-transfer.js — Real USDC transfers via Coinbase Advanced Trade API
  *
- * Uses ethers.js v6 to call transfer() on the USDC ERC-20 contract.
- * Private key loaded from env: HIVE_WALLET_PRIVATE_KEY
- * RPC: BASE_RPC_URL (defaults to https://mainnet.base.org, chain ID 8453)
+ * Uses Coinbase API (JWT auth with EC key) to send USDC from the Hive
+ * Coinbase account to any external address on Base L2.
  *
- * USDC on Base: 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913
- * 6 decimal places: 1 USDC = 1_000_000 units
+ * Required env vars:
+ *   COINBASE_API_KEY_NAME   — e.g. 56d481fc-f2ad-4b17-9c3a-10341afd8473
+ *   COINBASE_API_SECRET     — the base64 API secret
+ *   COINBASE_WALLET_SECRET  — the PEM EC private key (for JWT signing)
  *
- * Safe usage:
- *   const { sendUSDC, checkUSDCBalance } = require('./usdc-transfer');
- *   const result = await sendUSDC(recipientAddress, 1.00);   // 1.00 USDC
+ * Safe fallback: if env vars not set, returns {skipped: true} — DB credit
+ * still applies, nothing breaks.
  */
 
-const { ethers } = require('ethers');
+const crypto = require('crypto');
+const https  = require('https');
 
-// ─── Constants ────────────────────────────────────────────────────────────────
-const USDC_CONTRACT_ADDRESS = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
-const BASE_RPC_URL = process.env.BASE_RPC_URL || 'https://mainnet.base.org';
-const CHAIN_ID = 8453; // Base L2 mainnet
+const API_KEY_NAME    = process.env.COINBASE_API_KEY_NAME;
+const API_SECRET      = process.env.COINBASE_API_SECRET;
+const WALLET_SECRET   = process.env.COINBASE_WALLET_SECRET;
 
-// Minimal ERC-20 ABI — only what we need
-const ERC20_ABI = [
-  'function transfer(address to, uint256 amount) returns (bool)',
-  'function balanceOf(address owner) view returns (uint256)',
-  'function decimals() view returns (uint8)',
-  'function allowance(address owner, address spender) view returns (uint256)',
-];
+const CB_HOST = 'api.coinbase.com';
 
-// ─── Provider + Signer (lazy init) ───────────────────────────────────────────
-let _provider = null;
-let _signer   = null;
-let _contract  = null;
+// ─── Build JWT for Coinbase API auth ─────────────────────────────────────────
+function buildJWT(method, path) {
+  if (!API_KEY_NAME || !WALLET_SECRET) return null;
 
-function getProvider() {
-  if (!_provider) {
-    _provider = new ethers.JsonRpcProvider(BASE_RPC_URL, {
-      chainId: CHAIN_ID,
-      name: 'base',
+  const now = Math.floor(Date.now() / 1000);
+  const header = Buffer.from(JSON.stringify({ alg: 'ES256', kid: API_KEY_NAME })).toString('base64url');
+  const payload = Buffer.from(JSON.stringify({
+    sub: API_KEY_NAME,
+    iss: 'cdp',
+    nbf: now,
+    exp: now + 120,
+    uri: `${method} ${CB_HOST}${path}`,
+  })).toString('base64url');
+
+  const signingInput = `${header}.${payload}`;
+
+  // Decode the PEM wallet secret
+  let pemKey = WALLET_SECRET;
+  if (!pemKey.includes('-----')) {
+    // Raw base64 — wrap it
+    pemKey = `-----BEGIN EC PRIVATE KEY-----\n${pemKey}\n-----END EC PRIVATE KEY-----`;
+  }
+
+  const sign = crypto.createSign('SHA256');
+  sign.update(signingInput);
+  const sig = sign.sign(pemKey, 'base64url');
+
+  return `${signingInput}.${sig}`;
+}
+
+// ─── Generic Coinbase API call ────────────────────────────────────────────────
+function cbRequest(method, path, body = null) {
+  return new Promise((resolve, reject) => {
+    const jwt = buildJWT(method, path);
+    const bodyStr = body ? JSON.stringify(body) : null;
+
+    const options = {
+      hostname: CB_HOST,
+      path,
+      method,
+      headers: {
+        'Authorization': `Bearer ${jwt}`,
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      },
+    };
+    if (bodyStr) options.headers['Content-Length'] = Buffer.byteLength(bodyStr);
+
+    const req = https.request(options, (res) => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        try {
+          resolve({ status: res.statusCode, body: JSON.parse(data) });
+        } catch {
+          resolve({ status: res.statusCode, body: data });
+        }
+      });
     });
-  }
-  return _provider;
+
+    req.on('error', reject);
+    if (bodyStr) req.write(bodyStr);
+    req.end();
+  });
 }
 
-function getSigner() {
-  if (!_signer) {
-    const pk = process.env.HIVE_WALLET_PRIVATE_KEY;
-    if (!pk) {
-      throw new Error('HIVE_WALLET_PRIVATE_KEY env var not set — cannot sign transactions');
-    }
-    // Accept with or without 0x prefix
-    const normalizedPk = pk.startsWith('0x') ? pk : `0x${pk}`;
-    _signer = new ethers.Wallet(normalizedPk, getProvider());
-  }
-  return _signer;
-}
-
-function getContract() {
-  if (!_contract) {
-    _contract = new ethers.Contract(USDC_CONTRACT_ADDRESS, ERC20_ABI, getSigner());
-  }
-  return _contract;
-}
-
-// ─── Check Hive wallet USDC balance ──────────────────────────────────────────
+// ─── Get USDC balance from Coinbase ──────────────────────────────────────────
 async function checkUSDCBalance() {
+  if (!API_KEY_NAME || !WALLET_SECRET) {
+    return { ok: false, skipped: true, reason: 'COINBASE_API_KEY_NAME or COINBASE_WALLET_SECRET not set' };
+  }
+
   try {
-    const signer  = getSigner();
-    const contract = getContract();
-    const raw     = await contract.balanceOf(signer.address);
-    const usdc    = Number(raw) / 1_000_000;
+    const resp = await cbRequest('GET', '/api/v3/brokerage/accounts');
+    if (resp.status !== 200) {
+      return { ok: false, error: `Coinbase API error ${resp.status}`, detail: resp.body };
+    }
+
+    const accounts = resp.body.accounts || [];
+    const usdc = accounts.find(a => a.currency === 'USDC');
+    const balance = usdc ? parseFloat(usdc.available_balance?.value || 0) : 0;
+
     return {
-      address:      signer.address,
-      balance_usdc: usdc,
-      balance_raw:  raw.toString(),
       ok: true,
+      balance_usdc: balance,
+      account_uuid: usdc?.uuid || null,
+      source: 'coinbase',
     };
   } catch (err) {
     return { ok: false, error: err.message };
   }
 }
 
-// ─── Send USDC on-chain ───────────────────────────────────────────────────────
-/**
- * @param {string}  toAddress   — EVM recipient address (0x...)
- * @param {number}  amountUsdc  — amount in human USDC (e.g. 1.00 for $1)
- * @param {object}  opts        — optional: { gasLimit, maxPriorityFeePerGas }
- * @returns {object} { ok, tx_hash, amount_usdc, to, from, error? }
- */
+// ─── Send USDC via Coinbase API ───────────────────────────────────────────────
 async function sendUSDC(toAddress, amountUsdc, opts = {}) {
-  // Guard: env var must exist
-  if (!process.env.HIVE_WALLET_PRIVATE_KEY) {
-    console.warn('[usdc-transfer] HIVE_WALLET_PRIVATE_KEY not set — transfer skipped (DB-only mode)');
-    return {
-      ok: false,
-      skipped: true,
-      reason: 'HIVE_WALLET_PRIVATE_KEY not configured',
-      amount_usdc: amountUsdc,
-      to: toAddress,
-    };
+  if (!API_KEY_NAME || !WALLET_SECRET) {
+    console.warn('[usdc-transfer] Coinbase env vars not set — transfer skipped (DB-only mode)');
+    return { ok: false, skipped: true, reason: 'Coinbase API credentials not configured', amount_usdc: amountUsdc, to: toAddress };
   }
 
-  // Guard: valid EVM address
-  if (!toAddress || !ethers.isAddress(toAddress)) {
-    return { ok: false, error: `Invalid recipient address: ${toAddress}` };
+  if (!toAddress || amountUsdc <= 0) {
+    return { ok: false, error: 'Invalid address or amount' };
   }
-
-  // Guard: positive amount
-  if (!amountUsdc || amountUsdc <= 0) {
-    return { ok: false, error: 'Amount must be > 0' };
-  }
-
-  // Convert to USDC units (6 decimals) — use BigInt arithmetic to avoid float precision
-  const amountRaw = BigInt(Math.round(amountUsdc * 1_000_000));
 
   try {
-    const contract = getContract();
-    const signer   = getSigner();
-
-    // Check balance before sending
-    const balanceRaw = await contract.balanceOf(signer.address);
-    if (balanceRaw < amountRaw) {
-      const balanceHuman = Number(balanceRaw) / 1_000_000;
-      return {
-        ok: false,
-        error: `Insufficient USDC balance: have ${balanceHuman.toFixed(6)}, need ${amountUsdc}`,
-        wallet_balance_usdc: balanceHuman,
-      };
+    // Get USDC account UUID
+    const balResp = await checkUSDCBalance();
+    if (!balResp.ok) return { ok: false, error: 'Could not fetch balance', detail: balResp };
+    if (balResp.balance_usdc < amountUsdc) {
+      return { ok: false, error: `Insufficient USDC: have ${balResp.balance_usdc}, need ${amountUsdc}` };
     }
 
-    // Build tx overrides
-    const overrides = {};
-    if (opts.gasLimit) overrides.gasLimit = BigInt(opts.gasLimit);
+    const account_uuid = balResp.account_uuid;
+    if (!account_uuid) return { ok: false, error: 'USDC account not found on Coinbase' };
 
-    console.log(`[usdc-transfer] Sending ${amountUsdc} USDC → ${toAddress} on Base L2`);
-
-    const tx = await contract.transfer(toAddress, amountRaw, overrides);
-
-    console.log(`[usdc-transfer] TX submitted: ${tx.hash}`);
-
-    // Wait for 1 confirmation (Base is fast — ~2s blocks)
-    const receipt = await tx.wait(1);
-
-    console.log(`[usdc-transfer] Confirmed in block ${receipt.blockNumber} — hash: ${tx.hash}`);
-
-    return {
-      ok:           true,
-      tx_hash:      tx.hash,
-      block:        receipt.blockNumber,
-      amount_usdc:  amountUsdc,
-      amount_raw:   amountRaw.toString(),
-      from:         signer.address,
-      to:           toAddress,
-      chain:        'base',
-      chain_id:     CHAIN_ID,
-      explorer_url: `https://basescan.org/tx/${tx.hash}`,
+    // Send transaction
+    const idem = `hive-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const body = {
+      type: 'send',
+      to: toAddress,
+      amount: amountUsdc.toFixed(6),
+      currency: 'USDC',
+      network: 'base',
+      idem, // idempotency key
+      description: opts.reason || 'Hive referral credit',
     };
+
+    console.log(`[usdc-transfer] Sending ${amountUsdc} USDC → ${toAddress} via Coinbase API`);
+    const resp = await cbRequest('POST', `/api/v3/brokerage/accounts/${account_uuid}/transactions`, body);
+
+    if (resp.status === 200 || resp.status === 201) {
+      const tx = resp.body.transaction || resp.body;
+      console.log(`[usdc-transfer] Success — tx id: ${tx.id || tx.transaction_id}`);
+      return {
+        ok: true,
+        tx_hash: tx.network?.hash || tx.id || idem,
+        tx_id: tx.id,
+        amount_usdc: amountUsdc,
+        to: toAddress,
+        network: 'base',
+        source: 'coinbase_api',
+        status: tx.status,
+      };
+    } else {
+      console.error('[usdc-transfer] Coinbase send failed:', resp.body);
+      return { ok: false, error: `Coinbase API ${resp.status}`, detail: resp.body, amount_usdc: amountUsdc, to: toAddress };
+    }
   } catch (err) {
-    console.error(`[usdc-transfer] Transfer failed: ${err.message}`);
-    return {
-      ok:    false,
-      error: err.message,
-      amount_usdc: amountUsdc,
-      to:    toAddress,
-    };
+    console.error('[usdc-transfer] Exception:', err.message);
+    return { ok: false, error: err.message, amount_usdc: amountUsdc, to: toAddress };
   }
 }
 
-// ─── Test-mode: 0.01 USDC probe ──────────────────────────────────────────────
-/**
- * Send 0.01 USDC to a given address as a smoke-test.
- * Steve runs this once to verify the pipe works before enabling full bonuses.
- */
+// ─── Smoke test: send $0.01 USDC ─────────────────────────────────────────────
 async function testTransfer(toAddress) {
-  console.log('[usdc-transfer] Running 0.01 USDC smoke test...');
-  return sendUSDC(toAddress, 0.01);
+  console.log('[usdc-transfer] Running $0.01 USDC smoke test via Coinbase API...');
+  return sendUSDC(toAddress, 0.01, { reason: 'Hive smoke test' });
 }
 
 module.exports = { sendUSDC, checkUSDCBalance, testTransfer };
