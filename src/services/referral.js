@@ -115,13 +115,17 @@ async function convertReferral(new_agent_did) {
         const referrer_evm = referrer_vault.evm_address || null;
         if (referrer_evm) {
           console.log(`[referral] Sending ${REFERRAL_CREDIT_USDC} USDC on-chain → ${referrer_evm}`);
-          onchain_result = await sendUSDC(referrer_evm, REFERRAL_CREDIT_USDC);
+          onchain_result = await sendUSDC(referrer_evm, REFERRAL_CREDIT_USDC, {
+            reason: `referral_credit:${referral.referral_id}`,
+            referral_id: referral.referral_id
+          });
           if (onchain_result.ok) {
-            // Record tx hash in the referral row for auditability
+            // Persist tx_hash and updated credit_issued_at into referrals row
+            const creditNow = new Date().toISOString();
             await db.run(
-              'UPDATE referrals SET onchain_tx_hash = $1 WHERE referral_id = $2',
-              [onchain_result.tx_hash, referral.referral_id]
-            ).catch(() => { /* column may not exist yet — non-fatal */ });
+              'UPDATE referrals SET tx_hash = $1, credit_issued_at = $2 WHERE referral_id = $3',
+              [onchain_result.tx_hash, creditNow, referral.referral_id]
+            ).catch((e) => { console.error('[referral] Failed to persist tx_hash:', e.message); });
           } else {
             console.warn('[referral] On-chain transfer failed — DB credit preserved:', onchain_result.error);
           }

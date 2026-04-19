@@ -24,7 +24,8 @@ function memInit() {
     bonds: [],
     cashback_accounts: [],
     cashback_transactions: [],
-    referrals: []
+    referrals: [],
+    usdc_sends: []
   };
   console.log('[HiveBank] DATABASE_URL not set — using in-memory store (data resets on restart)');
 }
@@ -76,6 +77,11 @@ function memQuery(text, params = []) {
       const cols = colMatch[1].split(',').map(c => c.trim());
       const row = {};
       cols.forEach((col, i) => { row[col] = params[i] !== undefined ? params[i] : null; });
+      // Auto-increment SERIAL id for usdc_sends
+      if (tableName === 'usdc_sends' && row.id === null) {
+        const maxId = table.reduce((m, r) => Math.max(m, Number(r.id) || 0), 0);
+        row.id = maxId + 1;
+      }
       // ON CONFLICT DO NOTHING — skip if primary key exists
       if (/ON CONFLICT DO NOTHING/i.test(t)) {
         const pkMatch = t.match(/INSERT INTO\s+\w+\s*\(([^)]+)\)/i);
@@ -359,13 +365,42 @@ const DDL = `
 
   CREATE TABLE IF NOT EXISTS referrals (
     referral_id TEXT PRIMARY KEY,
-    new_agent_did TEXT NOT NULL UNIQUE,
+    new_agent_did TEXT UNIQUE NOT NULL,
     referrer_did TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'pending',
-    created_at TEXT,
+    referrer_wallet TEXT,
+    status TEXT DEFAULT 'pending',
+    created_at TEXT NOT NULL,
     converted_at TEXT,
-    credit_issued_at TEXT
+    credit_issued_at TEXT,
+    tx_hash TEXT,
+    amount_usdc NUMERIC DEFAULT 1.00
   );
+
+  CREATE TABLE IF NOT EXISTS usdc_sends (
+    id SERIAL PRIMARY KEY,
+    to_address TEXT NOT NULL,
+    amount_usdc NUMERIC NOT NULL,
+    reason TEXT,
+    tx_hash TEXT,
+    tx_id TEXT,
+    status TEXT DEFAULT 'pending',
+    created_at TEXT NOT NULL,
+    referral_id TEXT
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_referrals_referrer ON referrals(referrer_did);
+  CREATE INDEX IF NOT EXISTS idx_referrals_status ON referrals(status);
+  CREATE INDEX IF NOT EXISTS idx_usdc_sends_address ON usdc_sends(to_address);
+  CREATE INDEX IF NOT EXISTS idx_usdc_sends_created ON usdc_sends(created_at);
+`;
+
+// Migrations: add columns to existing tables (safe — IF NOT EXISTS style via DO block)
+const MIGRATIONS = `
+  DO $$ BEGIN
+    BEGIN ALTER TABLE referrals ADD COLUMN referrer_wallet TEXT; EXCEPTION WHEN duplicate_column THEN NULL; END;
+    BEGIN ALTER TABLE referrals ADD COLUMN tx_hash TEXT; EXCEPTION WHEN duplicate_column THEN NULL; END;
+    BEGIN ALTER TABLE referrals ADD COLUMN amount_usdc NUMERIC DEFAULT 1.00; EXCEPTION WHEN duplicate_column THEN NULL; END;
+  END $$;
 `;
 
 async function initialize() {
@@ -373,6 +408,7 @@ async function initialize() {
   const client = await pool.connect();
   try {
     await client.query(DDL);
+    await client.query(MIGRATIONS);
   } finally {
     client.release();
   }
@@ -416,4 +452,7 @@ async function getClient() {
   return pool.connect();
 }
 
-module.exports = { pool, initialize, query, getOne, getAll, run, getClient };
+// `all` is an alias for getAll — matches the API described in task spec
+const all = getAll;
+
+module.exports = { pool, initialize, query, getOne, getAll, all, run, getClient };

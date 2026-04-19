@@ -15,6 +15,7 @@
 
 const crypto = require('crypto');
 const https  = require('https');
+const db     = require('./db');
 
 const API_KEY_NAME    = process.env.COINBASE_API_KEY_NAME;  // organizations/xxx/apiKeys/xxx format
 const WALLET_SECRET   = process.env.COINBASE_WALLET_SECRET;  // EC PRIVATE KEY PEM
@@ -67,6 +68,21 @@ function recordSend(toAddress, amount, addrRecord) {
   addrRecord.total += amount;
   sendLedger.set(toAddress, addrRecord);
   hourlyTotal += amount;
+}
+
+// ─── Persist send audit record to usdc_sends table ────────────────────────────────────
+async function logSend({ toAddress, amountUsdc, reason, txHash, txId, status, referralId = null }) {
+  try {
+    const now = new Date().toISOString();
+    await db.run(
+      `INSERT INTO usdc_sends (to_address, amount_usdc, reason, tx_hash, tx_id, status, created_at, referral_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [toAddress, amountUsdc, reason || null, txHash || null, txId || null, status, now, referralId]
+    );
+  } catch (err) {
+    // Never let audit logging block the caller
+    console.error('[usdc-transfer] logSend error (non-fatal):', err.message);
+  }
 }
 
 // ─── Build JWT for Coinbase Advanced API (ES256 / EC key) ───────────────────
@@ -216,11 +232,22 @@ async function sendUSDC(toAddress, amountUsdc, opts = {}) {
 
     if (resp.status === 200 || resp.status === 201) {
       const tx = resp.body.data || resp.body;
+      const txHash = tx.network?.hash || tx.id;
       console.log(`[usdc-transfer] Success — tx id: ${tx.id}`);
       recordSend(toAddress, sendAmount, rateCheck.addrRecord);
+      // Persist audit record
+      await logSend({
+        toAddress,
+        amountUsdc: sendAmount,
+        reason: opts.reason || 'Hive referral credit',
+        txHash,
+        txId: tx.id,
+        status: 'completed',
+        referralId: opts.referral_id || null
+      });
       return {
         ok: true,
-        tx_hash: tx.network?.hash || tx.id,
+        tx_hash: txHash,
         tx_id: tx.id,
         amount_usdc: sendAmount,
         to: toAddress,
@@ -230,10 +257,30 @@ async function sendUSDC(toAddress, amountUsdc, opts = {}) {
       };
     } else {
       console.error('[usdc-transfer] Coinbase send failed:', resp.body);
+      // Persist failed audit record
+      await logSend({
+        toAddress,
+        amountUsdc: sendAmount,
+        reason: opts.reason || null,
+        txHash: null,
+        txId: null,
+        status: 'failed',
+        referralId: opts.referral_id || null
+      });
       return { ok: false, error: `Coinbase API ${resp.status}`, detail: resp.body, amount_usdc: sendAmount, to: toAddress };
     }
   } catch (err) {
     console.error('[usdc-transfer] Exception:', err.message);
+    // Persist failed audit record (best-effort)
+    await logSend({
+      toAddress,
+      amountUsdc: amountUsdc,
+      reason: opts.reason || null,
+      txHash: null,
+      txId: null,
+      status: 'failed',
+      referralId: opts.referral_id || null
+    }).catch(() => {});
     return { ok: false, error: err.message, amount_usdc: amountUsdc, to: toAddress };
   }
 }
@@ -244,4 +291,4 @@ async function testTransfer(toAddress) {
   return sendUSDC(toAddress, 0.01, { reason: 'Hive smoke test' });
 }
 
-module.exports = { sendUSDC, checkUSDCBalance, testTransfer };
+module.exports = { sendUSDC, checkUSDCBalance, testTransfer, logSend };
