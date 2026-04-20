@@ -392,13 +392,18 @@ const DDL = `
   CREATE TABLE IF NOT EXISTS usdc_sends (
     id SERIAL PRIMARY KEY,
     to_address TEXT NOT NULL,
+    amount_usd NUMERIC NOT NULL,
     amount_usdc NUMERIC NOT NULL,
     reason TEXT,
     tx_hash TEXT,
     tx_id TEXT,
     status TEXT DEFAULT 'pending',
     created_at TEXT NOT NULL,
-    referral_id TEXT
+    referral_id TEXT,
+    did TEXT,
+    wallet_address TEXT,
+    memo TEXT,
+    dna JSONB
   );
 
   CREATE INDEX IF NOT EXISTS idx_referrals_referrer ON referrals(referrer_did);
@@ -413,6 +418,7 @@ const DDL = `
     wallet_address TEXT NOT NULL,
     tx_hash TEXT,
     claimed_at TEXT NOT NULL,
+    dna JSONB,
     UNIQUE(did, trigger)
   );
 
@@ -425,6 +431,13 @@ const MIGRATIONS = `
     BEGIN ALTER TABLE referrals ADD COLUMN referrer_wallet TEXT; EXCEPTION WHEN duplicate_column THEN NULL; END;
     BEGIN ALTER TABLE referrals ADD COLUMN tx_hash TEXT; EXCEPTION WHEN duplicate_column THEN NULL; END;
     BEGIN ALTER TABLE referrals ADD COLUMN amount_usdc NUMERIC DEFAULT 1.00; EXCEPTION WHEN duplicate_column THEN NULL; END;
+    -- DNA stamp columns
+    BEGIN ALTER TABLE usdc_sends ADD COLUMN did TEXT; EXCEPTION WHEN duplicate_column THEN NULL; END;
+    BEGIN ALTER TABLE usdc_sends ADD COLUMN wallet_address TEXT; EXCEPTION WHEN duplicate_column THEN NULL; END;
+    BEGIN ALTER TABLE usdc_sends ADD COLUMN memo TEXT; EXCEPTION WHEN duplicate_column THEN NULL; END;
+    BEGIN ALTER TABLE usdc_sends ADD COLUMN dna JSONB; EXCEPTION WHEN duplicate_column THEN NULL; END;
+    BEGIN ALTER TABLE usdc_sends ADD COLUMN amount_usd NUMERIC; EXCEPTION WHEN duplicate_column THEN NULL; END;
+    BEGIN ALTER TABLE rewards ADD COLUMN dna JSONB; EXCEPTION WHEN duplicate_column THEN NULL; END;
   END $$;
 `;
 

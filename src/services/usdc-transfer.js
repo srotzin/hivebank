@@ -90,18 +90,42 @@ function recordSend(toAddress, amount, addrRecord) {
   hourlyTotal += amount;
 }
 
-// ─── Persist send audit record to usdc_sends table ────────────────────────────────────
-async function logSend({ toAddress, amountUsdc, reason, txHash, txId, status, referralId = null }) {
+// ─── Persist send audit record to usdc_sends table — with Hive DNA stamp ──────
+async function logSend({ toAddress, amountUsdc, reason, txHash, txId, status, referralId = null, hiveDid = null, hiveMemo = null }) {
   try {
     const now = new Date().toISOString();
+
+    // Build DNA stamp — every send record carries Hive identity
+    const dna = {
+      hive_network: 'Hive Civilization — 21 services',
+      hive_did: hiveDid,
+      hive_to_wallet: toAddress,
+      hive_amount_usd: amountUsdc,
+      hive_reason: reason,
+      hive_memo: hiveMemo || `Hive sent you $${amountUsdc}. Claim your agent DID: https://www.thehiveryiq.com/claim`,
+      hive_claim_url: `https://www.thehiveryiq.com/claim${hiveDid ? '?ref=' + encodeURIComponent(hiveDid) : ''}`,
+      hive_exchange: 'https://hiveexchange-service.onrender.com/v1/exchange/predict/markets',
+      hive_timestamp: now,
+    };
+
     await db.run(
-      `INSERT INTO usdc_sends (to_address, amount_usdc, reason, tx_hash, tx_id, status, created_at, referral_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-      [toAddress, amountUsdc, reason || null, txHash || null, txId || null, status, now, referralId]
+      `INSERT INTO usdc_sends (to_address, amount_usdc, amount_usd, reason, tx_hash, tx_id, status, created_at, referral_id, did, wallet_address, memo, dna)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+      [toAddress, amountUsdc, amountUsdc, reason || null, txHash || null, txId || null, status, now, referralId,
+       hiveDid || null, toAddress, hiveMemo || dna.hive_memo, JSON.stringify(dna)]
     );
   } catch (err) {
-    // Never let audit logging block the caller
-    console.error('[usdc-transfer] logSend error (non-fatal):', err.message);
+    // Never let audit logging block the caller — try minimal insert as fallback
+    try {
+      const now = new Date().toISOString();
+      await db.run(
+        `INSERT INTO usdc_sends (to_address, amount_usdc, reason, tx_hash, tx_id, status, created_at, referral_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        [toAddress, amountUsdc, reason || null, txHash || null, txId || null, status, now, referralId]
+      );
+    } catch (e2) {
+      console.error('[usdc-transfer] logSend error (non-fatal):', e2.message);
+    }
   }
 }
 
@@ -263,7 +287,9 @@ async function sendUSDC(toAddress, amountUsdc, opts = {}) {
         txHash,
         txId: tx.id,
         status: 'completed',
-        referralId: opts.referral_id || null
+        referralId: opts.referral_id || null,
+        hiveDid: opts.hive_did || null,
+        hiveMemo: opts.hive_memo || null,
       });
       return {
         ok: true,
@@ -285,7 +311,9 @@ async function sendUSDC(toAddress, amountUsdc, opts = {}) {
         txHash: null,
         txId: null,
         status: 'failed',
-        referralId: opts.referral_id || null
+        referralId: opts.referral_id || null,
+        hiveDid: opts.hive_did || null,
+        hiveMemo: opts.hive_memo || null,
       });
       return { ok: false, error: `Coinbase API ${resp.status}`, detail: resp.body, amount_usdc: sendAmount, to: toAddress };
     }
@@ -299,7 +327,9 @@ async function sendUSDC(toAddress, amountUsdc, opts = {}) {
       txHash: null,
       txId: null,
       status: 'failed',
-      referralId: opts.referral_id || null
+      referralId: opts.referral_id || null,
+      hiveDid: opts.hive_did || null,
+      hiveMemo: opts.hive_memo || null,
     }).catch(() => {});
     return { ok: false, error: err.message, amount_usdc: amountUsdc, to: toAddress };
   }

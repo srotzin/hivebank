@@ -444,6 +444,35 @@ app.use('/v1/bank/usdc', usdcRoutes);
 
 // ─── $1 Ladder Rewards (public for agents with x-hive-did, or x-hive-internal) ──
 app.use('/v1/bank/rewards', rewardsRoutes);
+// ─── Internal: recent USDC sends log ──────────────────────────────────────────
+const INTERNAL_KEY_VAL = process.env.HIVE_INTERNAL_KEY ||
+  'hive_internal_125e04e071e8829be631ea0216dd4a0c9b707975fcecaf8c62c6a2ab43327d46';
+
+app.get('/v1/bank/sends/recent', async (req, res) => {
+  const key = req.headers['x-hive-internal'];
+  if (!key || key !== INTERNAL_KEY_VAL) {
+    return res.status(401).json({ status: 'error', error: 'INTERNAL_KEY_REQUIRED' });
+  }
+  try {
+    const db = require('./services/db');
+    const result = await db.query(
+      `SELECT id, did, wallet_address, amount_usd, memo, tx_hash, status, created_at, dna
+       FROM usdc_sends ORDER BY created_at DESC LIMIT 50`
+    );
+    const total = await db.query('SELECT COUNT(*) as cnt, SUM(amount_usd) as vol FROM usdc_sends');
+    return res.json({
+      ok: true,
+      sends: result.rows,
+      total_count: parseInt(total.rows[0]?.cnt || 0, 10),
+      total_volume_usd: parseFloat(total.rows[0]?.vol || 0),
+      _hive: { network: 'Hive Civilization — 21 services', timestamp: new Date().toISOString() }
+    });
+  } catch (err) {
+    return res.status(500).json({ status: 'error', error: 'DB_ERROR', detail: err.message });
+  }
+});
+
+
 
 // Velocity Doctrine — discovery & onboarding endpoints
 
