@@ -422,6 +422,10 @@ app.get('/v1/bank/referral/card/:did(*)', async (req, res) => {
 // All other referral routes require auth
 app.use('/v1/bank/referral', authMiddleware, referralRoutes);
 
+// ─── $1 Ladder Rewards — MUST be before the /v1/bank catch-all treasury router ──
+// /v1/bank/rewards/* has its own auth (rewardsAuth + internalOnly) inside rewards.js
+app.use('/v1/bank/rewards', rewardsRoutes);
+
 // ─── Treasury primitives (yield / delegation / payment-stream / credit) ────────
 // Mount treasury router at /v1/bank — handles /vault/yield, /delegate, /delegate/check,
 // /stream/start, /stream/:stream_id, /credit
@@ -442,8 +446,7 @@ app.use('/v1/bank/compliance', complianceRoutes);
 // ─── USDC on-chain transfer routes (internal auth via x-hive-internal) ────────
 app.use('/v1/bank/usdc', usdcRoutes);
 
-// ─── $1 Ladder Rewards (public for agents with x-hive-did, or x-hive-internal) ──
-app.use('/v1/bank/rewards', rewardsRoutes);
+// ─── $1 Ladder Rewards already registered above treasury catch-all ──────────────
 // ─── Internal: recent USDC sends log ──────────────────────────────────────────
 const INTERNAL_KEY_VAL = process.env.HIVE_INTERNAL_KEY ||
   'hive_internal_125e04e071e8829be631ea0216dd4a0c9b707975fcecaf8c62c6a2ab43327d46';
