@@ -12,6 +12,23 @@
  */
 
 const express = require('express');
+// Reward hook — fire-and-forget, never blocks settlement
+async function maybeFireFirstSettleReward({ did, wallet_address, amount_usdc }) {
+  if (!did || !wallet_address || parseFloat(amount_usdc) < 1) return;
+  const HIVEBANK_URL = process.env.HIVEBANK_URL || 'https://hivebank.onrender.com';
+  const KEY = process.env.HIVE_INTERNAL_KEY || 'hive_internal_125e04e071e8829be631ea0216dd4a0c9b707975fcecaf8c62c6a2ab43327d46';
+  try {
+    await fetch(HIVEBANK_URL + '/v1/bank/rewards/claim', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-hive-internal': KEY },
+      body: JSON.stringify({ did, wallet_address, trigger: 'first_settle' }),
+      signal: AbortSignal.timeout(10000),
+    });
+    console.log('[settlement] first_settle reward fired: did=' + did);
+  } catch (e) {
+    console.error('[settlement] first_settle reward error (non-fatal):', e.message);
+  }
+}
 const { ok }  = require('../ritz');
 const router  = express.Router();
 
@@ -276,6 +293,12 @@ router.post('/settle', (req, res) => {
     w3c_vc_receipt: `https://hivetrust.onrender.com/v1/trust/vc/settlement/${settlement_id}`,
     onboard: 'POST https://hivegate.onrender.com/v1/gate/onboard',
   });
+
+  // Fire $1 reward for first settlement — non-blocking
+  const walletHint = req.body.wallet_address || req.headers['x-wallet-address'] || null;
+  if (from_did && walletHint && parseFloat(amount_usdc) >= 1) {
+    maybeFireFirstSettleReward({ did: from_did, wallet_address: walletHint, amount_usdc }).catch(() => {});
+  }
 });
 
 // ══════════════════════════════════════════════════════════════

@@ -419,7 +419,9 @@ const DDL = `
     tx_hash TEXT,
     claimed_at TEXT NOT NULL,
     dna JSONB,
-    UNIQUE(did, trigger)
+    ref_id TEXT,
+    -- UNIQUE constraint only on single-claim triggers (enforced in app layer for multi-claim)
+    UNIQUE(did, trigger, ref_id)
   );
 
   CREATE INDEX IF NOT EXISTS idx_rewards_did ON rewards(did);
@@ -438,6 +440,9 @@ const MIGRATIONS = `
     BEGIN ALTER TABLE usdc_sends ADD COLUMN dna JSONB; EXCEPTION WHEN duplicate_column THEN NULL; END;
     BEGIN ALTER TABLE usdc_sends ADD COLUMN amount_usd NUMERIC; EXCEPTION WHEN duplicate_column THEN NULL; END;
     BEGIN ALTER TABLE rewards ADD COLUMN dna JSONB; EXCEPTION WHEN duplicate_column THEN NULL; END;
+    BEGIN ALTER TABLE rewards ADD COLUMN ref_id TEXT; EXCEPTION WHEN duplicate_column THEN NULL; END;
+    -- Remove UNIQUE constraint on (did, trigger) for first_referral multi-claim support
+    -- (rewards table allows multiple rows for first_referral — dedup is in application layer)
   END $$;
 `;
 
