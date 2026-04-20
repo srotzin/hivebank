@@ -357,7 +357,7 @@ app.post('/mcp', express.json(), handleMcpRequest);
 // NOTE: must be mounted BEFORE the existing vault routes to avoid path conflicts
 app.use('/v1/bank/vault', yieldVaultRoutes);
 
-// All API routes require auth
+// All other API routes require auth
 app.use('/v1/bank/vault', authMiddleware, vaultRoutes);
 app.use('/v1/bank/budget', authMiddleware, budgetRoutes);
 app.use('/v1/bank/credit', authMiddleware, creditRoutes);
