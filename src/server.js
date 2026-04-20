@@ -629,9 +629,6 @@ setInterval(async () => {
 async function start() {
   await db.initialize();
 
-  // Start Yield Vault — initializes schema + background threads (YieldMonitor, NAVUpdater, Rebalancer)
-  await yieldVault.startYieldVault();
-
   // Seed cashback accounts after tables exist
   const cashback = require('./services/cashback');
   await cashback.seedCashbackAccounts();
@@ -644,6 +641,12 @@ async function start() {
     console.log(`HiveBank — Agent Treasury Protocol running on port ${PORT}`);
     console.log(`Endpoints: http://localhost:${PORT}/`);
     console.log(`[graph-seed] Agent Transaction Graph: ${agentIndex.size} agents, ${transactions.size} transactions`);
+
+    // Start Yield Vault AFTER server is listening — APY fetches are non-critical for startup
+    // Prevents Render health-check timeout if external DeFi APIs are slow
+    yieldVault.startYieldVault().catch(err =>
+      console.error('[vault] Non-fatal startup error:', err.message)
+    );
   });
 }
 
