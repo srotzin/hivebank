@@ -18,6 +18,8 @@ const vault = require('./services/vault');
 const credit = require('./services/credit');
 const budget = require('./services/budget');
 const db = require('./services/db');
+const yieldVaultRoutes = require('./routes/yield-vault');
+const yieldVault = require('./services/yield-vault');
 
 // ─── Agent Transaction Graph ─────────────────────────────────────────────────
 const graphRoutes       = require('./routes/graph');
@@ -102,6 +104,15 @@ app.get('/', (req, res) => {
         configure_reinvest: { method: 'POST', path: '/v1/bank/vault/configure-reinvest', description: 'Configure auto-reinvestment percentage for vault' },
         reinvestment_stats: { method: 'GET', path: '/v1/bank/vault/{id}/reinvestment-stats', description: 'Get reinvestment stats and history' },
         spend_budget: { method: 'POST', path: '/v1/bank/vault/spend-budget', description: 'Spend from execution budget (reinvested pool)' }
+      },
+      yield_vault: {
+        deposit: { method: 'POST', path: '/v1/bank/vault/deposit', auth: 'public', description: 'Set and Forget USDC vault — deposit USDC, earn maximum DeFi yield automatically (Aave/Morpho/Spark/Compound on Base). Returns shares proportional to NAV.' },
+        balance: { method: 'GET', path: '/v1/bank/vault/{did}', auth: 'public', description: 'Yield vault balance: current value, yield earned, protocol allocation, projected APY' },
+        withdraw: { method: 'POST', path: '/v1/bank/vault/withdraw', auth: 'public', description: 'Withdraw USDC from yield vault — burns shares, returns principal + accrued yield' },
+        rates: { method: 'GET', path: '/v1/bank/vault/rates', auth: 'none', description: 'Live APY from all 4 protocols: Aave, Morpho, Spark, Compound on Base. Best protocol highlighted.' },
+        stats: { method: 'GET', path: '/v1/bank/vault/stats', auth: 'none', description: 'Total TVL, yield earned, rebalance count, protocol breakdown' },
+        rebalance: { method: 'POST', path: '/v1/bank/vault/rebalance', auth: 'x-hive-internal', description: 'Manual rebalance trigger (internal key required). Auto-rebalancer runs every 15 min.' },
+        phase: 'Phase 1 — paper trading with real APY feeds. Set SIMULATED=false in yield-vault.js to activate live execution (Phase 2, requires $50K+ capital).'
       },
       budget: {
         create: { method: 'POST', path: '/v1/bank/budget/create', description: 'Create budget delegation' },
@@ -340,6 +351,11 @@ app.get('/.well-known/agent.json', (req, res) => {
 
 // MCP JSON-RPC endpoint — no auth (protocol handles its own negotiation)
 app.post('/mcp', express.json(), handleMcpRequest);
+
+// ─── Yield Vault — Set and Forget USDC yield optimization vault ─────────────
+// PUBLIC routes first (rates, stats, deposit, withdraw) — no authMiddleware
+// NOTE: must be mounted BEFORE the existing vault routes to avoid path conflicts
+app.use('/v1/bank/vault', yieldVaultRoutes);
 
 // All API routes require auth
 app.use('/v1/bank/vault', authMiddleware, vaultRoutes);
@@ -612,6 +628,9 @@ setInterval(async () => {
 // Async startup: initialize DB schema, seed data, then listen
 async function start() {
   await db.initialize();
+
+  // Start Yield Vault — initializes schema + background threads (YieldMonitor, NAVUpdater, Rebalancer)
+  await yieldVault.startYieldVault();
 
   // Seed cashback accounts after tables exist
   const cashback = require('./services/cashback');

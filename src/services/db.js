@@ -26,7 +26,10 @@ function memInit() {
     cashback_transactions: [],
     referrals: [],
     usdc_sends: [],
-    rewards: []
+    rewards: [],
+    yield_vaults: [],
+    vault_allocations: [],
+    vault_events: []
   };
   console.log('[HiveBank] DATABASE_URL not set — using in-memory store (data resets on restart)');
 }
