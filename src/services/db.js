@@ -39,8 +39,10 @@ let pool;
 if (process.env.DATABASE_URL) {
   pool = new Pool({
     connectionString: process.env.DATABASE_URL,
-    min: 2,
-    max: 10
+    min: 0,      // Don't pre-open connections at startup (prevents blocking Render health check)
+    max: 10,
+    connectionTimeoutMillis: 10000,  // 10s connect timeout
+    idleTimeoutMillis: 30000
   });
   pool.on('error', (err) => {
     console.error('Unexpected PostgreSQL pool error:', err.message);

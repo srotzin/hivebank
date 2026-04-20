@@ -625,25 +625,28 @@ setInterval(async () => {
   }
 }, 10 * 60 * 1000);
 
-// Async startup: initialize DB schema, seed data, then listen
+// Async startup: bind port immediately, init DB and vault in background
+// This pattern ensures Render health-check succeeds even if DB/vault are slow
 async function start() {
-  await db.initialize();
-
-  // Seed cashback accounts after tables exist
-  const cashback = require('./services/cashback');
-  await cashback.seedCashbackAccounts();
-
-  // Seed Agent Transaction Graph — 50 agents, 200 transactions over 30 days
+  // Seed Agent Transaction Graph — synchronous, no I/O
   seedGraph();
 
+  // Listen FIRST — Render health check must pass within ~30s
   app.listen(PORT, () => {
     const { transactions, agentIndex } = require('./services/graph');
     console.log(`HiveBank — Agent Treasury Protocol running on port ${PORT}`);
     console.log(`Endpoints: http://localhost:${PORT}/`);
     console.log(`[graph-seed] Agent Transaction Graph: ${agentIndex.size} agents, ${transactions.size} transactions`);
 
-    // Start Yield Vault AFTER server is listening — APY fetches are non-critical for startup
-    // Prevents Render health-check timeout if external DeFi APIs are slow
+    // DB init + cashback seed AFTER port is open (non-blocking for health check)
+    db.initialize()
+      .then(() => {
+        const cashback = require('./services/cashback');
+        return cashback.seedCashbackAccounts();
+      })
+      .catch(err => console.error('[HiveBank] DB init error (non-fatal):', err.message));
+
+    // Yield Vault startup — makes external APY API calls, must be after listen
     yieldVault.startYieldVault().catch(err =>
       console.error('[vault] Non-fatal startup error:', err.message)
     );
