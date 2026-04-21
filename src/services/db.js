@@ -39,6 +39,7 @@ let pool;
 if (process.env.DATABASE_URL) {
   pool = new Pool({
     connectionString: process.env.DATABASE_URL,
+    ssl: process.env.DATABASE_URL.includes('localhost') ? false : { rejectUnauthorized: false },
     min: 0,      // Don't pre-open connections at startup (prevents blocking Render health check)
     max: 10,
     connectionTimeoutMillis: 10000,  // 10s connect timeout
