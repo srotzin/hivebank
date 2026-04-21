@@ -28,6 +28,7 @@ const settlementRoutes  = require('./routes/settlement');
 const usdcRoutes        = require('./routes/usdc');
 const rewardsRoutes     = require('./routes/rewards');
 const hivewalletRoutes  = require('./routes/hivewallet');
+const payRoutes         = require('./routes/pay');
 const { seedGraph } = require('./services/seed');
 
 const app = express();
@@ -446,6 +447,10 @@ app.use('/v1/bank/rewards', rewardsRoutes);
 // HiveWallet — The first A2A wallet. DID IS the account.
 // /info and /:did/card are public. All others require x-hive-did or x-hive-internal.
 app.use('/v1/wallet', hivewalletRoutes);
+
+// HivePay — Universal A2A payment. Any asset. Any chain. One endpoint.
+// "Send $50. Done. Nobody asks what chain you're on."
+app.use('/v1/pay', payRoutes);
 
 // ─── Treasury primitives (yield / delegation / payment-stream / credit) ────────
 // Mount treasury router at /v1/bank — handles /vault/yield, /delegate, /delegate/check,
