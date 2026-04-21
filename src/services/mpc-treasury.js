@@ -55,8 +55,12 @@ const db     = require('./db');
 const fs     = require('fs');
 const path   = require('path');
 
-const CDP_KEY_NAME   = process.env.CDP_API_KEY_NAME   || process.env.COINBASE_API_KEY_NAME;
-const CDP_KEY_SECRET = process.env.CDP_API_KEY_SECRET  || process.env.COINBASE_WALLET_SECRET;
+// Accept either CDP_ prefix (new) or COINBASE_ prefix (existing Render env)
+const CDP_KEY_NAME   = process.env.CDP_API_KEY_NAME   ||
+                       process.env.COINBASE_API_KEY_NAME;
+const CDP_KEY_SECRET = process.env.CDP_API_KEY_SECRET  ||
+                       process.env.COINBASE_WALLET_SECRET  ||
+                       process.env.COINBASE_API_SECRET;
 const CDP_NETWORK    = process.env.CDP_NETWORK_ID      || 'base-mainnet';
 const WALLET_DATA_PATH = path.join('/tmp', 'hive-mpc-wallet.json');
 
