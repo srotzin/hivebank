@@ -52,8 +52,6 @@
 const { Coinbase, Wallet, Transfer } = require('@coinbase/coinbase-sdk');
 const crypto = require('crypto');
 const db     = require('./db');
-const fs     = require('fs');
-const path   = require('path');
 
 // Accept either CDP_ prefix (new) or COINBASE_ prefix (existing Render env)
 const CDP_KEY_NAME   = process.env.CDP_API_KEY_NAME   ||
@@ -62,7 +60,47 @@ const CDP_KEY_SECRET = process.env.CDP_API_KEY_SECRET  ||
                        process.env.COINBASE_WALLET_SECRET  ||
                        process.env.COINBASE_API_SECRET;
 const CDP_NETWORK    = process.env.CDP_NETWORK_ID      || 'base-mainnet';
-const WALLET_DATA_PATH = path.join('/tmp', 'hive-mpc-wallet.json');
+
+// ── Persistent wallet storage via Postgres ────────────────────────────────────
+// Wallet data (exported seed) survives Render restarts and redeploys.
+// Previously stored in /tmp — wiped on every restart. Now in DB.
+
+async function ensureWalletTable() {
+  await db.run(`
+    CREATE TABLE IF NOT EXISTS mpc_wallet_data (
+      key         TEXT PRIMARY KEY,
+      value       TEXT NOT NULL,
+      updated_at  TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+}
+
+async function loadWalletData() {
+  try {
+    await ensureWalletTable();
+    const row = await db.getOne(
+      `SELECT value FROM mpc_wallet_data WHERE key = 'hive_mpc_wallet'`
+    );
+    return row ? JSON.parse(row.value) : null;
+  } catch (e) {
+    console.error('[MPC] loadWalletData error:', e.message);
+    return null;
+  }
+}
+
+async function saveWalletData(walletData) {
+  try {
+    await ensureWalletTable();
+    await db.run(`
+      INSERT INTO mpc_wallet_data (key, value, updated_at)
+      VALUES ('hive_mpc_wallet', $1, NOW())
+      ON CONFLICT (key) DO UPDATE
+        SET value = EXCLUDED.value, updated_at = NOW()
+    `, [JSON.stringify(walletData)]);
+  } catch (e) {
+    console.error('[MPC] saveWalletData error:', e.message);
+  }
+}
 
 // Asset ID map — Coinbase SDK asset identifiers
 const ASSET_IDS = {
@@ -118,17 +156,17 @@ async function init() {
       privateKey:   pemKey,
     });
 
-    // Load or create MPC wallet
-    if (fs.existsSync(WALLET_DATA_PATH)) {
-      const saved = JSON.parse(fs.readFileSync(WALLET_DATA_PATH, 'utf8'));
+    // Load or create MPC wallet — persisted in Postgres (survives restarts)
+    const saved = await loadWalletData();
+    if (saved) {
       _wallet = await Wallet.import(saved);
-      console.log('[MPC] Wallet loaded from saved data, ID:', _wallet.getId());
+      console.log('[MPC] Wallet loaded from DB, ID:', _wallet.getId());
     } else {
       _wallet = await Wallet.create({ networkId: CDP_NETWORK });
-      // Persist wallet data (encrypted seed)
+      // Persist wallet seed to Postgres immediately
       const walletData = _wallet.export();
-      fs.writeFileSync(WALLET_DATA_PATH, JSON.stringify(walletData), { mode: 0o600 });
-      console.log('[MPC] New wallet created, ID:', _wallet.getId());
+      await saveWalletData(walletData);
+      console.log('[MPC] New wallet created and saved to DB, ID:', _wallet.getId());
     }
 
     _initialized = true;
