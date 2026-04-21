@@ -27,6 +27,7 @@ const complianceRoutes  = require('./routes/compliance');
 const settlementRoutes  = require('./routes/settlement');
 const usdcRoutes        = require('./routes/usdc');
 const rewardsRoutes     = require('./routes/rewards');
+const hivewalletRoutes  = require('./routes/hivewallet');
 const { seedGraph } = require('./services/seed');
 
 const app = express();
@@ -441,6 +442,10 @@ app.use('/v1/bank/referral', authMiddleware, referralRoutes);
 // ─── $1 Ladder Rewards — MUST be before the /v1/bank catch-all treasury router ──
 // /v1/bank/rewards/* has its own auth (rewardsAuth + internalOnly) inside rewards.js
 app.use('/v1/bank/rewards', rewardsRoutes);
+
+// HiveWallet — The first A2A wallet. DID IS the account.
+// /info and /:did/card are public. All others require x-hive-did or x-hive-internal.
+app.use('/v1/wallet', hivewalletRoutes);
 
 // ─── Treasury primitives (yield / delegation / payment-stream / credit) ────────
 // Mount treasury router at /v1/bank — handles /vault/yield, /delegate, /delegate/check,
