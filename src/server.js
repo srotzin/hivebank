@@ -31,6 +31,7 @@ const hivewalletRoutes  = require('./routes/hivewallet');
 const payRoutes         = require('./routes/pay');
 const treasuryMpcRoutes = require('./routes/treasury-mpc');
 const a2aRoutes         = require('./routes/a2a');
+const promosRoutes      = require('./routes/promos');
 const { seedGraph } = require('./services/seed');
 
 const app = express();
@@ -456,6 +457,7 @@ app.use('/v1/pay', payRoutes);
 
 // ─── A2A Protocol JSON-RPC — POST / (v0.2.1 + legacy tasks/send) ────────────
 app.use('/', a2aRoutes);
+app.use('/v1/bank/promos', promosRoutes);
 
 // HiveWallet MPC Treasury — Better than Ledger.
 // ETH, SOL, BTC, DOGE, USDC, ALEO + 100 more. Coinbase MPC. Active treasury.
