@@ -26,8 +26,23 @@ function recruitmentResponse(res) {
 }
 
 function authMiddleware(req, res, next) {
+  // Internal service key — always passes
   const internalKey = req.headers['x-hive-internal'];
   if (internalKey && internalKey === process.env.HIVE_INTERNAL_KEY) {
+    return next();
+  }
+
+  // Agent DID auth — any valid did:hive: identifier is accepted.
+  // DIDs are minted by HiveGate and are the primary agent identity.
+  // We trust the DID format as proof of onboarding (HiveGate validates at mint).
+  const agentDid =
+    req.headers['x-hive-did'] ||
+    req.headers['x-hivetrust-did'] ||
+    req.headers['x-agent-did'] ||
+    req.body?.did;
+
+  if (agentDid && typeof agentDid === 'string' && agentDid.startsWith('did:hive:')) {
+    req.agentDid = agentDid;
     return next();
   }
 
