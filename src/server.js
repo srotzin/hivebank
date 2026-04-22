@@ -34,6 +34,10 @@ const a2aRoutes         = require('./routes/a2a');
 const promosRoutes      = require('./routes/promos');
 const { seedGraph } = require('./services/seed');
 
+// Merged from hiveecho and hivemessenger
+const echoRoutes      = require('./routes/echo');
+const messengerRoutes = require('./routes/messenger');
+
 const app = express();
 const PORT = process.env.PORT || 3001;
 
@@ -482,6 +486,12 @@ app.use('/v1/bank/compliance', complianceRoutes);
 
 // ─── USDC on-chain transfer routes (internal auth via x-hive-internal) ────────
 app.use('/v1/bank/usdc', usdcRoutes);
+
+// Merged hiveecho routes
+app.use('/v1/echo', echoRoutes);
+
+// Merged hivemessenger routes
+app.use('/v1/messenger', messengerRoutes);
 
 // ─── $1 Ladder Rewards already registered above treasury catch-all ──────────────
 // ─── Internal: recent USDC sends log ──────────────────────────────────────────
