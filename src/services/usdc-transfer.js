@@ -253,14 +253,19 @@ async function sendUSDC(toAddress, amountUsdc, opts = {}) {
     try {
       result = await sendUSDCOnChain(toAddress, amountUsdc);
     } catch (err) {
-      console.warn('[usdc-transfer] On-chain send failed, trying Coinbase fallback:', err.message);
-      result = { ok: false, error: err.message };
+      console.error('[usdc-transfer] On-chain send FAILED:', err.message, err.stack);
+      result = { ok: false, error: 'onchain_error: ' + err.message, onchain_attempted: true };
+    }
+    // If on-chain was attempted, do NOT fall through to Coinbase — surface the real error
+    if (result && !result.ok) {
+      await logSend({ toAddress, amountUsdc, reason: opts.reason||'hive_transfer', txHash:null, txId:null, status:'failed' }).catch(()=>{});
+      return result;
     }
   }
 
-  // ── Fallback: Coinbase API ────────────────────────────────────────────────
+  // ── Fallback: Coinbase API (only if no wallet key configured) ─────────────
   if (!result?.ok && API_KEY_NAME && WALLET_SECRET) {
-    console.log('[usdc-transfer] Falling back to Coinbase API send');
+    console.log('[usdc-transfer] No wallet key — falling back to Coinbase API send');
     try {
       result = await sendUSDCCoinbase(toAddress, amountUsdc, opts);
     } catch (err) {
