@@ -11,7 +11,7 @@
 
 const express = require('express');
 const router  = express.Router();
-const { sendUSDC, checkUSDCBalance, testTransfer } = require('../services/usdc-transfer');
+const { sendUSDC, checkUSDCBalance } = require('../services/usdc-transfer');
 
 const INTERNAL_KEY = process.env.HIVE_INTERNAL_KEY ||
   'hive_internal_125e04e071e8829be631ea0216dd4a0c9b707975fcecaf8c62c6a2ab43327d46';
@@ -45,11 +45,11 @@ router.post('/test', requireInternal, async (req, res) => {
   if (!to) return res.status(400).json({ error: 'to (EVM address) is required' });
 
   console.log(`[USDC/test] Smoke test → ${to}`);
-  const result = await testTransfer(to);
+  const result = await sendUSDC(to, 1.00, { reason: "smoke_test" });
 
   res.status(result.ok ? 200 : 500).json({
     test: true,
-    amount_usdc: 0.01,
+    amount_usdc: 1.00,
     ...result,
     note: result.ok
       ? 'Smoke test passed — pipe is live. You can now enable full welcome bonuses.'
