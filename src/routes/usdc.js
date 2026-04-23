@@ -11,7 +11,7 @@
 
 const express = require('express');
 const router  = express.Router();
-const { sendUSDC, checkUSDCBalance } = require('../services/usdc-transfer');
+const { sendUSDC, checkUSDCBalance, submitEIP3009Authorization } = require('../services/usdc-transfer');
 
 const INTERNAL_KEY = process.env.HIVE_INTERNAL_KEY ||
   'hive_internal_125e04e071e8829be631ea0216dd4a0c9b707975fcecaf8c62c6a2ab43327d46';
@@ -177,6 +177,25 @@ router.post('/verify-tx', requireInternal, async (req, res) => {
 });
 
 // ─── POST /v1/bank/usdc/record-x402 — record inbound x402 payment ────────────
+
+// ─── POST /v1/bank/usdc/submit-authorization — settle EIP-3009 signed payment on-chain ───────────
+// Called by x402 middleware after receiving signed EIP-3009 auth from agent.
+// Treasury wallet submits the authorization to the USDC contract — USDC moves on-chain.
+router.post('/submit-authorization', requireInternal, async (req, res) => {
+  const { payload, payer_did } = req.body;
+  if (!payload) return res.status(400).json({ error: 'payload (EIP-3009 authorization + signature) required' });
+
+  console.log(`[submit-authorization] Settling x402 payment from ${payer_did || 'unknown'}`);
+  const result = await submitEIP3009Authorization(payload);
+
+  if (result.ok) {
+    console.log(`[submit-authorization] ✅ Settled ${result.amount_usdc} USDC | tx: ${result.tx_hash}`);
+    return res.json({ settled: true, ...result });
+  }
+  if (result.skipped) return res.status(503).json({ settled: false, ...result });
+  return res.status(500).json({ settled: false, ...result });
+});
+
 router.post('/record-x402', requireInternal, async (req, res) => {
   const { tx_hash, amount_usdc, payer } = req.body;
   if (!tx_hash || !amount_usdc) return res.status(400).json({ error: 'tx_hash and amount_usdc required' });

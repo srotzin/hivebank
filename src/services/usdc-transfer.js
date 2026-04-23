@@ -41,6 +41,11 @@ const ERC20_ABI = [
   'function decimals() view returns (uint8)',
 ];
 
+// EIP-3009 ABI — transferWithAuthorization (gasless, signed by payer)
+const EIP3009_ABI = [
+  'function transferWithAuthorization(address from, address to, uint256 value, uint256 validAfter, uint256 validBefore, bytes32 nonce, uint8 v, bytes32 r, bytes32 s)',
+];
+
 // ─── Rate limiter ─────────────────────────────────────────────────────────────
 const MAX_PER_ADDRESS_PER_HOUR = 10.00;
 const MAX_TOTAL_PER_HOUR = 50.00;
@@ -299,4 +304,65 @@ async function testTransfer(toAddress) {
   return sendUSDC(toAddress, 1.00, { reason: 'smoke_test' });
 }
 
-module.exports = { sendUSDC, checkUSDCBalance, testTransfer, logSend };
+// ─── Submit EIP-3009 Authorization on-chain (x402 settlement) ────────────────────────────────────────────────
+// Takes a signed EIP-3009 authorization payload from the x402 client and submits
+// it on-chain using the treasury wallet as the gas-paying submitter.
+// The USDC contract then transfers `value` from `from` (agent) to `to` (treasury).
+async function submitEIP3009Authorization(payload) {
+  if (!WALLET_PRIVATE_KEY) {
+    return { ok: false, skipped: true, reason: 'HIVE_WALLET_PRIVATE_KEY not set — cannot submit authorization' };
+  }
+
+  try {
+    const { authorization, signature } = payload;
+    if (!authorization || !signature) {
+      return { ok: false, error: 'payload missing authorization or signature' };
+    }
+
+    const provider = new ethers.JsonRpcProvider(BASE_RPC, { chainId: CHAIN_ID, name: 'base' });
+    const submitter = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);  // treasury pays gas
+    const usdc = new ethers.Contract(USDC_CONTRACT, EIP3009_ABI, submitter);
+
+    // Split the signature into v, r, s
+    const sig = ethers.Signature.from(signature);
+
+    console.log(`[eip3009] Submitting transferWithAuthorization: ${authorization.from} → ${authorization.to} | ${authorization.value} atomic USDC`);
+
+    const tx = await usdc.transferWithAuthorization(
+      authorization.from,
+      authorization.to,
+      BigInt(authorization.value),
+      BigInt(authorization.validAfter),
+      BigInt(authorization.validBefore),
+      authorization.nonce,
+      sig.v,
+      sig.r,
+      sig.s,
+    );
+
+    const receipt = await tx.wait();
+    const amountUsdc = Number(authorization.value) / 1_000_000;
+
+    console.log(`[eip3009] Settled: ${tx.hash} | ${amountUsdc} USDC | block ${receipt.blockNumber}`);
+
+    // Record in ledger
+    await logSend({
+      toAddress: authorization.to,
+      amountUsdc,
+      reason:    'x402_eip3009_settlement',
+      txHash:    tx.hash,
+      txId:      tx.hash,
+      status:    'completed',
+      hiveDid:   authorization.from,
+    });
+
+    return { ok: true, tx_hash: tx.hash, amount_usdc: amountUsdc, block: receipt.blockNumber,
+             explorer: `https://basescan.org/tx/${tx.hash}` };
+
+  } catch (err) {
+    console.error('[eip3009] Submit failed:', err.message);
+    return { ok: false, error: err.message };
+  }
+}
+
+module.exports = { sendUSDC, checkUSDCBalance, testTransfer, logSend, submitEIP3009Authorization };
