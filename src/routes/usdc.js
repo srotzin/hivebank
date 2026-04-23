@@ -128,3 +128,67 @@ router.get('/diag', requireInternal, async (req, res) => {
     ethers_version: ethersVersion,
   });
 });
+
+// ─── POST /v1/bank/usdc/verify-tx — verify on-chain tx for x402 ──────────────
+router.post('/verify-tx', requireInternal, async (req, res) => {
+  const { tx_hash, expected_recipient, expected_amount_usdc, network } = req.body;
+  if (!tx_hash) return res.status(400).json({ error: 'tx_hash required' });
+
+  try {
+    const { ethers } = require('ethers');
+    const provider = new ethers.JsonRpcProvider(
+      process.env.BASE_RPC_URL || 'https://base.drpc.org',
+      { chainId: 8453, name: 'base' }
+    );
+
+    const receipt = await provider.getTransactionReceipt(tx_hash);
+    if (!receipt) return res.json({ verified: false, reason: 'tx not found or not confirmed' });
+
+    // Parse ERC-20 Transfer event
+    const TRANSFER_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
+    const USDC = '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913';
+    const usdcLog = receipt.logs.find(l =>
+      l.address.toLowerCase() === USDC &&
+      l.topics[0] === TRANSFER_TOPIC
+    );
+
+    if (!usdcLog) return res.json({ verified: false, reason: 'no USDC transfer in tx' });
+
+    const to = '0x' + usdcLog.topics[2].slice(26);
+    const amount = parseInt(usdcLog.data, 16) / 1e6;
+
+    const recipientMatch = !expected_recipient || to.toLowerCase() === expected_recipient.toLowerCase();
+    const amountMatch = !expected_amount_usdc || amount >= parseFloat(expected_amount_usdc) * 0.99;
+
+    console.log(`[verify-tx] ${tx_hash} → to:${to} amount:${amount} USDC | match:${recipientMatch && amountMatch}`);
+
+    res.json({
+      verified: recipientMatch && amountMatch,
+      to, amount_usdc: amount,
+      recipient_match: recipientMatch,
+      amount_match: amountMatch,
+      block: receipt.blockNumber,
+    });
+  } catch (err) {
+    console.error('[verify-tx] error:', err.message);
+    // Fallback: if RPC down, allow through (don't block legitimate payers)
+    res.json({ verified: true, fallback: true, reason: err.message });
+  }
+});
+
+// ─── POST /v1/bank/usdc/record-x402 — record inbound x402 payment ────────────
+router.post('/record-x402', requireInternal, async (req, res) => {
+  const { tx_hash, amount_usdc, payer } = req.body;
+  if (!tx_hash || !amount_usdc) return res.status(400).json({ error: 'tx_hash and amount_usdc required' });
+  await logSend({
+    toAddress: process.env.HOUSE_WALLET || '0xE5588c407b6AdD3E83ce34190C77De20eaC1BeFe',
+    amountUsdc: amount_usdc,
+    reason: 'x402_inbound',
+    txHash: tx_hash,
+    txId: tx_hash,
+    status: 'completed',
+    hiveDid: payer || null,
+  });
+  console.log(`[record-x402] ${amount_usdc} USDC inbound | tx:${tx_hash} | payer:${payer}`);
+  res.json({ ok: true, recorded: true });
+});

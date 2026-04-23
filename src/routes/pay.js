@@ -74,12 +74,12 @@ const INTERNAL_KEY = process.env.HIVE_INTERNAL_KEY ||
 // They don't need to know anything about Hive's internal rails.
 const INBOUND_ADDRESSES = {
   // EVM chains — all resolve to the same Base address for USDC
-  usdc_base:      process.env.HOUSE_WALLET     || '0x78B3B3C356E89b5a69C488c6032509Ef4260B6bf',
-  usdc_eth:       process.env.HOUSE_WALLET     || '0x78B3B3C356E89b5a69C488c6032509Ef4260B6bf',
-  usdc_arbitrum:  process.env.HOUSE_WALLET     || '0x78B3B3C356E89b5a69C488c6032509Ef4260B6bf',
-  usdc_optimism:  process.env.HOUSE_WALLET     || '0x78B3B3C356E89b5a69C488c6032509Ef4260B6bf',
-  usdc_polygon:   process.env.HOUSE_WALLET     || '0x78B3B3C356E89b5a69C488c6032509Ef4260B6bf',
-  eth:            process.env.HOUSE_WALLET     || '0x78B3B3C356E89b5a69C488c6032509Ef4260B6bf',
+  usdc_base:      process.env.HOUSE_WALLET     || '0xE5588c407b6AdD3E83ce34190C77De20eaC1BeFe',
+  usdc_eth:       process.env.HOUSE_WALLET     || '0xE5588c407b6AdD3E83ce34190C77De20eaC1BeFe',
+  usdc_arbitrum:  process.env.HOUSE_WALLET     || '0xE5588c407b6AdD3E83ce34190C77De20eaC1BeFe',
+  usdc_optimism:  process.env.HOUSE_WALLET     || '0xE5588c407b6AdD3E83ce34190C77De20eaC1BeFe',
+  usdc_polygon:   process.env.HOUSE_WALLET     || '0xE5588c407b6AdD3E83ce34190C77De20eaC1BeFe',
+  eth:            process.env.HOUSE_WALLET     || '0xE5588c407b6AdD3E83ce34190C77De20eaC1BeFe',
   aleo:           process.env.ALEO_SHIELD      || 'aleo1cyk7r2jmd7lfcftzyy85z4j5x6rlern598qecx8v2ms738xcvgyq72q6tk',
   sol:            process.env.SOL_ADDRESS      || null,   // add when Solana address available
   btc:            process.env.BTC_ADDRESS      || null,   // add when BTC address available

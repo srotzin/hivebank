@@ -35,7 +35,7 @@ const router  = express.Router();
 const SERVICE = 'hivebank';
 
 const ALEO_SHIELD = 'aleo1cyk7r2jmd7lfcftzyy85z4j5x6rlern598qecx8v2ms738xcvgyq72q6tk';
-const BASE_USDC   = '0x78B3B3C356E89b5a69C488c6032509Ef4260B6bf';
+const BASE_USDC   = '0xE5588c407b6AdD3E83ce34190C77De20eaC1BeFe';
 
 router.get('/settlement-rails', (req, res) => {
   return ok(res, SERVICE, {
