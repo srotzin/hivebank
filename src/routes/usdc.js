@@ -107,3 +107,24 @@ router.post('/welcome', requireInternal, async (req, res) => {
 });
 
 module.exports = router;
+
+// ─── GET /v1/bank/usdc/diag — env var + ethers check (internal) ──────────────
+router.get('/diag', requireInternal, async (req, res) => {
+  let ethersOk = false;
+  let ethersVersion = null;
+  try {
+    const e = require('ethers');
+    ethersVersion = e.version || 'loaded';
+    ethersOk = true;
+  } catch(err) {
+    ethersVersion = err.message;
+  }
+  res.json({
+    HIVE_WALLET_PRIVATE_KEY_set: !!process.env.HIVE_WALLET_PRIVATE_KEY,
+    HIVE_WALLET_PRIVATE_KEY_prefix: process.env.HIVE_WALLET_PRIVATE_KEY ? process.env.HIVE_WALLET_PRIVATE_KEY.slice(0,6) : null,
+    BASE_RPC_URL: process.env.BASE_RPC_URL || null,
+    COINBASE_API_KEY_NAME_set: !!process.env.COINBASE_API_KEY_NAME,
+    ethers_ok: ethersOk,
+    ethers_version: ethersVersion,
+  });
+});
