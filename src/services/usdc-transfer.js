@@ -29,10 +29,19 @@ const API_KEY_NAME        = process.env.COINBASE_API_KEY_NAME;
 const WALLET_SECRET       = process.env.COINBASE_WALLET_SECRET;
 const SENDS_PAUSED        = process.env.USDC_SENDS_PAUSED === 'true';
 
-// Base L2
-const BASE_RPC            = process.env.BASE_RPC_URL || 'https://mainnet.base.org';
+// Base L2 — RPC cascade (first one that accepts batches wins)
+// drpc.org free tier blocks batches >3 — always use 1rpc.io/base as primary
+const BASE_RPC_CANDIDATES = [
+  process.env.BASE_RPC_URL,           // env override (if set AND not drpc free tier)
+  'https://1rpc.io/base',             // free, no batch limit, proven reliable
+  'https://mainnet.base.org',         // Coinbase public, 403 from non-browser but fallback
+].filter(Boolean);
+// Strip drpc free tier — it blocks batches >3 and kills every EIP-3009 settlement
+const BASE_RPC_FILTERED = BASE_RPC_CANDIDATES.filter(r => !r.includes('drpc.org'));
+const BASE_RPC            = BASE_RPC_FILTERED[0] || 'https://1rpc.io/base';
 const USDC_CONTRACT       = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
 const CHAIN_ID            = 8453;
+console.log(`[usdc-transfer] RPC: ${BASE_RPC}`);
 
 // ERC-20 minimal ABI — transfer + balanceOf only
 const ERC20_ABI = [
