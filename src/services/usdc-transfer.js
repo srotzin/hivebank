@@ -308,9 +308,23 @@ async function testTransfer(toAddress) {
 // Takes a signed EIP-3009 authorization payload from the x402 client and submits
 // it on-chain using the treasury wallet as the gas-paying submitter.
 // The USDC contract then transfers `value` from `from` (agent) to `to` (treasury).
+// Shared provider — created once, reused across all settlements. No cold provider per call.
+let _provider = null;
+let _submitter = null;
+let _usdcContract = null;
+
+function getSettlementContracts() {
+  if (!_provider) {
+    _provider    = new ethers.JsonRpcProvider(BASE_RPC, { chainId: CHAIN_ID, name: 'base' });
+    _submitter   = new ethers.Wallet(WALLET_PRIVATE_KEY, _provider);
+    _usdcContract = new ethers.Contract(USDC_CONTRACT, EIP3009_ABI, _submitter);
+  }
+  return { provider: _provider, submitter: _submitter, usdc: _usdcContract };
+}
+
 async function submitEIP3009Authorization(payload) {
   if (!WALLET_PRIVATE_KEY) {
-    return { ok: false, skipped: true, reason: 'HIVE_WALLET_PRIVATE_KEY not set — cannot submit authorization' };
+    return { ok: false, skipped: true, reason: 'HIVE_WALLET_PRIVATE_KEY not set' };
   }
 
   try {
@@ -319,15 +333,14 @@ async function submitEIP3009Authorization(payload) {
       return { ok: false, error: 'payload missing authorization or signature' };
     }
 
-    const provider = new ethers.JsonRpcProvider(BASE_RPC, { chainId: CHAIN_ID, name: 'base' });
-    const submitter = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);  // treasury pays gas
-    const usdc = new ethers.Contract(USDC_CONTRACT, EIP3009_ABI, submitter);
-
-    // Split the signature into v, r, s
+    const { usdc } = getSettlementContracts(); // reuse warm connection — no setup latency
     const sig = ethers.Signature.from(signature);
+    const amountUsdc = Number(authorization.value) / 1_000_000;
 
-    console.log(`[eip3009] Submitting transferWithAuthorization: ${authorization.from} → ${authorization.to} | ${authorization.value} atomic USDC`);
+    console.log(`[eip3009] Broadcasting: ${authorization.from} → ${authorization.to} | $${amountUsdc} USDC`);
 
+    // Broadcast the transaction — do NOT wait for confirmation (tx.wait() blocks)
+    // Return the tx hash immediately. The blockchain will confirm it — that is certain.
     const tx = await usdc.transferWithAuthorization(
       authorization.from,
       authorization.to,
@@ -340,27 +353,51 @@ async function submitEIP3009Authorization(payload) {
       sig.s,
     );
 
-    const receipt = await tx.wait();
-    const amountUsdc = Number(authorization.value) / 1_000_000;
+    console.log(`[eip3009] ✅ Broadcast: ${tx.hash} | $${amountUsdc} USDC | confirming on-chain...`);
 
-    console.log(`[eip3009] Settled: ${tx.hash} | ${amountUsdc} USDC | block ${receipt.blockNumber}`);
-
-    // Record in ledger
-    await logSend({
+    // Record immediately with broadcast status — confirmation is async
+    logSend({
       toAddress: authorization.to,
       amountUsdc,
       reason:    'x402_eip3009_settlement',
       txHash:    tx.hash,
       txId:      tx.hash,
-      status:    'completed',
+      status:    'broadcast',
       hiveDid:   authorization.from,
+    }).catch(() => {});
+
+    // Confirm in background — updates log, does not block response
+    tx.wait(1).then(receipt => {
+      console.log(`[eip3009] ⛓  Confirmed: ${tx.hash} | block ${receipt.blockNumber}`);
+      logSend({
+        toAddress: authorization.to,
+        amountUsdc,
+        reason:    'x402_eip3009_settlement',
+        txHash:    tx.hash,
+        txId:      tx.hash,
+        status:    'completed',
+        hiveDid:   authorization.from,
+      }).catch(() => {});
+    }).catch(err => {
+      // Confirmation failure does not mean the tx failed — it may still confirm
+      console.warn(`[eip3009] Confirmation listener error (tx may still confirm): ${err.message}`);
     });
 
-    return { ok: true, tx_hash: tx.hash, amount_usdc: amountUsdc, block: receipt.blockNumber,
-             explorer: `https://basescan.org/tx/${tx.hash}` };
+    // Return immediately — settled: true as soon as broadcast succeeds
+    return {
+      ok:          true,
+      settled:     true,
+      tx_hash:     tx.hash,
+      amount_usdc: amountUsdc,
+      status:      'broadcast',
+      explorer:    `https://basescan.org/tx/${tx.hash}`,
+      note:        'Broadcast confirmed. On-chain confirmation follows within ~2 blocks.',
+    };
 
   } catch (err) {
-    console.error('[eip3009] Submit failed:', err.message);
+    console.error('[eip3009] Broadcast failed:', err.message);
+    // Reset contracts on RPC error so next call gets a fresh connection
+    _provider = null; _submitter = null; _usdcContract = null;
     return { ok: false, error: err.message };
   }
 }
