@@ -570,6 +570,7 @@ router.get('/diag', requireInternal, async (req, res) => {
     HIVE_WALLET_PRIVATE_KEY_set:    !!process.env.HIVE_WALLET_PRIVATE_KEY,
     HIVE_WALLET_PRIVATE_KEY_prefix: process.env.HIVE_WALLET_PRIVATE_KEY?.slice(0, 6) || null,
     BASE_RPC_URL:                   process.env.BASE_RPC_URL || null,
+    BASE_RPC_URLS_count:            (process.env.BASE_RPC_URLS || '').split(',').filter(s => s.trim()).length,
     COINBASE_API_KEY_NAME_set:      !!process.env.COINBASE_API_KEY_NAME,
     ethers_ok:                      ethersOk,
     ethers_version:                 ethersVersion,
@@ -585,11 +586,10 @@ router.post('/verify-tx', requireInternal, async (req, res) => {
   if (!tx_hash) return res.status(400).json({ error: 'tx_hash required' });
 
   try {
-    const { ethers } = require('ethers');
-    const provider = new ethers.JsonRpcProvider(
-      process.env.BASE_RPC_URL || 'https://mainnet.base.org',
-      { chainId: 8453, name: 'base' }
-    );
+    // Reuse the shared FallbackProvider/RPC pool from usdc-transfer so verify-tx
+    // benefits from the same Alchemy-primary failover as settlement.
+    const { getReadProvider } = require('../services/usdc-transfer');
+    const provider = getReadProvider();
 
     const receipt = await provider.getTransactionReceipt(tx_hash);
     if (!receipt) return res.json({ verified: false, reason: 'tx not found or not confirmed' });

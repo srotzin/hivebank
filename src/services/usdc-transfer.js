@@ -34,19 +34,44 @@ const API_KEY_NAME        = process.env.COINBASE_API_KEY_NAME;
 const WALLET_SECRET       = process.env.COINBASE_WALLET_SECRET;
 const SENDS_PAUSED        = process.env.USDC_SENDS_PAUSED === 'true';
 
-// Base L2 — RPC cascade (first one that accepts batches wins)
-// drpc.org free tier blocks batches >3 — always use 1rpc.io/base as primary
+// Base L2 — RPC cascade (FallbackProvider for true failover)
+// drpc.org free tier blocks batches >3 — stripped from candidate list.
+// BASE_RPC_URL: single override (back-compat).
+// BASE_RPC_URLS: comma-separated list (preferred; goes into FallbackProvider in priority order).
+const _envList = (process.env.BASE_RPC_URLS || '')
+  .split(',')
+  .map(s => s.trim())
+  .filter(Boolean);
 const BASE_RPC_CANDIDATES = [
-  process.env.BASE_RPC_URL,           // env override (if set AND not drpc free tier)
+  ...(_envList.length ? _envList : [process.env.BASE_RPC_URL].filter(Boolean)),
   'https://1rpc.io/base',             // free, no batch limit, proven reliable
   'https://mainnet.base.org',         // Coinbase public, 403 from non-browser but fallback
 ].filter(Boolean);
 // Strip drpc free tier — it blocks batches >3 and kills every EIP-3009 settlement
 const BASE_RPC_FILTERED = BASE_RPC_CANDIDATES.filter(r => !r.includes('drpc.org'));
-const BASE_RPC            = BASE_RPC_FILTERED[0] || 'https://1rpc.io/base';
+// De-dupe while preserving order
+const BASE_RPCS = [...new Set(BASE_RPC_FILTERED)];
+if (BASE_RPCS.length === 0) BASE_RPCS.push('https://1rpc.io/base');
+const BASE_RPC = BASE_RPCS[0]; // legacy single-URL ref kept for log compat
 const USDC_CONTRACT       = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
 const CHAIN_ID            = 8453;
-console.log(`[usdc-transfer] RPC: ${BASE_RPC}`);
+console.log(`[usdc-transfer] RPC primary: ${BASE_RPC} (${BASE_RPCS.length} total in failover pool)`);
+
+// Build a FallbackProvider so a single RPC blip can't take settlement down.
+// quorum: 1 = first successful response wins (fast). priority: lower = preferred.
+function buildBaseProvider() {
+  if (BASE_RPCS.length === 1) {
+    // Single RPC — FallbackProvider needs >=2 to be useful, fall back to JsonRpcProvider.
+    return new ethers.JsonRpcProvider(BASE_RPCS[0], { chainId: CHAIN_ID, name: 'base' });
+  }
+  const configs = BASE_RPCS.map((url, i) => ({
+    provider: new ethers.JsonRpcProvider(url, { chainId: CHAIN_ID, name: 'base' }),
+    priority: i + 1,
+    weight: i === 0 ? 2 : 1,
+    stallTimeout: 2000,
+  }));
+  return new ethers.FallbackProvider(configs, CHAIN_ID, { quorum: 1 });
+}
 
 // ERC-20 minimal ABI — transfer + balanceOf only
 const ERC20_ABI = [
@@ -146,7 +171,7 @@ async function logSend({ toAddress, amountUsdc, reason, txHash, txId, status, re
 
 // ─── PRIMARY: Direct on-chain send via ethers.js ──────────────────────────────
 async function sendUSDCOnChain(toAddress, amountUsdc) {
-  const provider = new ethers.JsonRpcProvider(BASE_RPC, { chainId: CHAIN_ID, name: 'base' });
+  const provider = buildBaseProvider();
   const wallet   = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
   const usdc     = new ethers.Contract(USDC_CONTRACT, ERC20_ABI, wallet);
 
@@ -244,7 +269,7 @@ async function checkUSDCBalance() {
   // Primary: check on-chain wallet balance
   if (WALLET_PRIVATE_KEY) {
     try {
-      const provider = new ethers.JsonRpcProvider(BASE_RPC, { chainId: CHAIN_ID, name: 'base' });
+      const provider = buildBaseProvider();
       const wallet   = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
       const usdc     = new ethers.Contract(USDC_CONTRACT, ERC20_ABI, provider);
       const decimals = await usdc.decimals();
@@ -402,7 +427,7 @@ let _usdcContract = null;
 
 function getSettlementContracts() {
   if (!_provider) {
-    _provider    = new ethers.JsonRpcProvider(BASE_RPC, { chainId: CHAIN_ID, name: 'base' });
+    _provider    = buildBaseProvider();
     _submitter   = new ethers.Wallet(WALLET_PRIVATE_KEY, _provider);
     _usdcContract = new ethers.Contract(USDC_CONTRACT, EIP3009_ABI, _submitter);
   }
@@ -512,4 +537,14 @@ function _dbBreakerStats() {
   };
 }
 
-module.exports = { sendUSDC, checkUSDCBalance, testTransfer, logSend, submitEIP3009Authorization, _dbBreakerStats };
+// Read-only provider helper for other modules (e.g. routes/usdc.js verify-tx).
+// Returns the shared FallbackProvider so verify-tx benefits from the same
+// Alchemy-primary failover pool as settlement.
+function getReadProvider() {
+  if (!_provider) {
+    _provider = buildBaseProvider();
+  }
+  return _provider;
+}
+
+module.exports = { sendUSDC, checkUSDCBalance, testTransfer, logSend, submitEIP3009Authorization, _dbBreakerStats, getReadProvider };
