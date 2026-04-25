@@ -29,10 +29,14 @@ const CAP_WINDOW_MS = 60 * 60 * 1000;
 const CAP_MAX_EVENTS = 4096;
 
 function _bumpCapture(kind) {
-  // kind: 'request' (any inbound paying call) | 'capture' (settled successfully)
+  // kind:
+  //   'request_real'   = inbound paying call that reached settlement path
+  //   'request_replay' = inbound that hit nonce-replay short-circuit (no leak)
+  //   'capture'        = settled successfully on chain
+  // Legacy 'request' is treated as request_real for back-compat.
+  const k = (kind === 'request') ? 'request_real' : kind;
   const now = Date.now();
-  captureWindow.events.push({ kind, t: now });
-  // bound + age out
+  captureWindow.events.push({ kind: k, t: now });
   const cutoff = now - CAP_WINDOW_MS;
   while (captureWindow.events.length && captureWindow.events[0].t < cutoff) {
     captureWindow.events.shift();
@@ -45,17 +49,22 @@ function _bumpCapture(kind) {
 function _captureStats() {
   const now = Date.now();
   const cutoff = now - CAP_WINDOW_MS;
-  let req = 0, cap = 0;
+  let real = 0, replay = 0, cap = 0;
   for (const e of captureWindow.events) {
     if (e.t < cutoff) continue;
-    if (e.kind === 'request') req += 1;
-    else if (e.kind === 'capture') cap += 1;
+    if (e.kind === 'request_real')        real += 1;
+    else if (e.kind === 'request_replay') replay += 1;
+    else if (e.kind === 'capture')        cap += 1;
   }
+  // Leak = real paying traffic but zero captures sustained over the window.
+  // Replays are by-design non-captures (looper) and must NOT trigger leak alarm.
   return {
-    requests_60min: req,
-    captures_60min: cap,
-    capture_rate:   req === 0 ? 1 : cap / req,
-    leak_suspected: req > 0 && cap === 0,
+    requests_real_60min:   real,
+    requests_replay_60min: replay,
+    captures_60min:        cap,
+    capture_rate:          real === 0 ? 1 : cap / real,
+    replay_share:          (real + replay) === 0 ? 0 : replay / (real + replay),
+    leak_suspected:        real >= 5 && cap === 0,
   };
 }
 

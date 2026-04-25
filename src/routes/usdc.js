@@ -184,7 +184,9 @@ function _bumpCapture(kind) {
 
 router.post('/submit-authorization', requireInternal, async (req, res) => {
   const door_t0 = Date.now();
-  _bumpCapture('request');
+  // NOTE: capture-rate bump moved below the nonce-replay short-circuit so that
+  // replay traffic counts as 'request_replay' (by-design non-capture, not a leak)
+  // and only fresh nonces count as 'request_real' for the leak heuristic.
   const { payload, payer_did } = req.body;
 
   // ─── Stage 0: Shape validation ──────────────────────────────────────────────
@@ -254,11 +256,15 @@ router.post('/submit-authorization', requireInternal, async (req, res) => {
       console.warn(`[door:eip3009] ↩  REPLAY ORIGIN | nonce=${nonce} ip=${src_ip} ua="${srcRec.ua}" payer_did=${payer_did || 'unknown'} cached_status=${cached.status}`);
     }
 
+    _bumpCapture('request_replay');
     return res.status(cached.status).json({
       ...cached.resp,
       replay: true,
     });
   }
+
+  // Fresh nonce → real paying traffic. Bump now; settlement path will bump 'capture' on success.
+  _bumpCapture('request_real');
 
   // ─── Stage 2: Time-window pre-check ─────────────────────────────────────────
   // Reject expired (or about-to-expire) authorizations BEFORE broadcasting them.
