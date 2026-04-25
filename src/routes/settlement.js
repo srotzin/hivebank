@@ -30,12 +30,16 @@ async function maybeFireFirstSettleReward({ did, wallet_address, amount_usdc }) 
   }
 }
 const { ok }  = require('../ritz');
+// Treasury-fallback purge 2026-04-25: settlement wallet is the treasury.
+// Misnamed `BASE_USDC` constant (was a wallet address, not a token contract) replaced
+// by lazy resolver. Token contract for Base USDC remains hardcoded inline
+// at the rails entry below (canonical Circle contract, immutable).
+const { getTreasuryAddress } = require('../lib/treasury');
 const router  = express.Router();
 
 const SERVICE = 'hivebank';
 
 const ALEO_SHIELD = 'aleo1cyk7r2jmd7lfcftzyy85z4j5x6rlern598qecx8v2ms738xcvgyq72q6tk';
-const BASE_USDC   = '0xE5588c407b6AdD3E83ce34190C77De20eaC1BeFe';
 
 router.get('/settlement-rails', (req, res) => {
   return ok(res, SERVICE, {
@@ -47,8 +51,8 @@ router.get('/settlement-rails', (req, res) => {
         network: 'Base (Ethereum L2)',
         chain_id: 8453,
         contract: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
-        settlement_wallet: BASE_USDC,
-        explorer: `https://basescan.org/address/${BASE_USDC}`,
+        settlement_wallet: getTreasuryAddress(),
+        explorer: `https://basescan.org/address/${getTreasuryAddress()}`,
         finality_seconds: 2,
         privacy: 'public',
         privacy_detail: 'Transaction amounts and addresses visible on-chain.',
@@ -126,7 +130,7 @@ router.get('/settlement-rails', (req, res) => {
       docs: 'https://www.circle.com/xreserve',
     },
     hive_aleo_address: ALEO_SHIELD,
-    hive_base_address: BASE_USDC,
+    hive_base_address: getTreasuryAddress(),
     privacy_matrix: {
       'base-usdc':   { amounts: 'public',  addresses: 'public',  anonymity: 'none' },
       'aleo-usdcx':  { amounts: 'private', addresses: 'visible', anonymity: 'partial' },
@@ -286,7 +290,7 @@ router.post('/settle', (req, res) => {
       issuer: meta.issuer,
       stealth_note: meta.stealth_note,
     }),
-    settlement_wall: rail.startsWith('aleo') ? ALEO_SHIELD : BASE_USDC,
+    settlement_wall: rail.startsWith('aleo') ? ALEO_SHIELD : getTreasuryAddress(),
     settled_at: ts,
     hive_atg_record: `atg_${settlement_id}`, // Agent Transaction Graph record
     hahs_compliant: true,
@@ -447,7 +451,7 @@ router.post('/settle/auto', (req, res) => {
     hahs_agreement_id: hahs_agreement_id || null,
     hahs_compliant:    true,
     auto_settled:      true,
-    settlement_wall:   effectiveRail.startsWith('aleo') ? ALEO_SHIELD : BASE_USDC,
+    settlement_wall:   effectiveRail.startsWith('aleo') ? ALEO_SHIELD : getTreasuryAddress(),
     settled_at:        ts,
     hive_atg_record:   `atg_${settlement_id}`,
     w3c_vc_receipt:    `https://hivetrust.onrender.com/v1/trust/vc/settlement/${settlement_id}`,

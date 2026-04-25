@@ -67,24 +67,32 @@ const { sendUSDC } = require('../services/usdc-transfer');
 
 // Leaked-key purge 2026-04-25: lazy read, fail closed if env missing.
 const { getInternalKey } = require('../lib/internal-key');
+// Treasury-fallback purge 2026-04-25: lazy read, fail closed if env missing.
+const { getTreasuryAddress } = require('../lib/treasury');
 
 // Inbound deposit addresses — this is the magic.
 // When someone on Coinbase/MetaMask/Phantom asks "where do I send?"
 // we give them the address that matches what THEY can send.
 // They don't need to know anything about Hive's internal rails.
-const INBOUND_ADDRESSES = {
-  // EVM chains — all resolve to the same Base address for USDC
-  usdc_base:      process.env.HOUSE_WALLET     || '0xE5588c407b6AdD3E83ce34190C77De20eaC1BeFe',
-  usdc_eth:       process.env.HOUSE_WALLET     || '0xE5588c407b6AdD3E83ce34190C77De20eaC1BeFe',
-  usdc_arbitrum:  process.env.HOUSE_WALLET     || '0xE5588c407b6AdD3E83ce34190C77De20eaC1BeFe',
-  usdc_optimism:  process.env.HOUSE_WALLET     || '0xE5588c407b6AdD3E83ce34190C77De20eaC1BeFe',
-  usdc_polygon:   process.env.HOUSE_WALLET     || '0xE5588c407b6AdD3E83ce34190C77De20eaC1BeFe',
-  eth:            process.env.HOUSE_WALLET     || '0xE5588c407b6AdD3E83ce34190C77De20eaC1BeFe',
-  aleo:           process.env.ALEO_SHIELD      || 'aleo1cyk7r2jmd7lfcftzyy85z4j5x6rlern598qecx8v2ms738xcvgyq72q6tk',
-  sol:            process.env.SOL_ADDRESS      || null,   // add when Solana address available
-  btc:            process.env.BTC_ADDRESS      || null,   // add when BTC address available
-  usdc_solana:    process.env.SOL_ADDRESS      || null,
-};
+//
+// Resolved lazily via getInboundAddresses() so a missing HOUSE_WALLET
+// surfaces as a clear 503 per request rather than a boot-time crash.
+function getInboundAddresses() {
+  const t = getTreasuryAddress();
+  return {
+    // EVM chains — all resolve to the same Base address for USDC
+    usdc_base:      t,
+    usdc_eth:       t,
+    usdc_arbitrum:  t,
+    usdc_optimism:  t,
+    usdc_polygon:   t,
+    eth:            t,
+    aleo:           process.env.ALEO_SHIELD      || 'aleo1cyk7r2jmd7lfcftzyy85z4j5x6rlern598qecx8v2ms738xcvgyq72q6tk',
+    sol:            process.env.SOL_ADDRESS      || null,   // add when Solana address available
+    btc:            process.env.BTC_ADDRESS      || null,   // add when BTC address available
+    usdc_solana:    process.env.SOL_ADDRESS      || null,
+  };
+}
 
 // Live price feeds (cached, refreshed every 60s)
 let priceCache = {
@@ -224,9 +232,12 @@ router.post('/quote', async (req, res) => {
     }
   }
 
-  const depositAddress = INBOUND_ADDRESSES[asset.toLowerCase()] ||
-    INBOUND_ADDRESSES[`${asset.toLowerCase()}_base`] ||
-    INBOUND_ADDRESSES['usdc_base'];
+  let inbound;
+  try { inbound = getInboundAddresses(); }
+  catch (e) { return res.status(503).json({ error: 'TREASURY_NOT_CONFIGURED', message: e.message }); }
+  const depositAddress = inbound[asset.toLowerCase()] ||
+    inbound[`${asset.toLowerCase()}_base`] ||
+    inbound['usdc_base'];
 
   res.json({
     from_asset: asset,
@@ -261,37 +272,41 @@ router.get('/address/:did', async (req, res) => {
 
   const wallet = await db.getOne('SELECT * FROM hivewallet_wallets WHERE did=$1', [did]).catch(() => null);
 
+  let inbound;
+  try { inbound = getInboundAddresses(); }
+  catch (e) { return res.status(503).json({ error: 'TREASURY_NOT_CONFIGURED', message: e.message }); }
+
   // Pick the right deposit address based on what the sender has
   let depositAddress, network, instructions;
 
   if (['USDC'].includes(asset) && !chain) {
-    depositAddress = INBOUND_ADDRESSES.usdc_base;
+    depositAddress = inbound.usdc_base;
     network = 'Base L2 (also works from ETH, Arbitrum, Optimism, Polygon, Solana — same USDC)';
     instructions = `Send USDC from your wallet to this address. Works from Coinbase, MetaMask, Phantom, any exchange.`;
   } else if (asset === 'ETH') {
-    depositAddress = INBOUND_ADDRESSES.eth;
+    depositAddress = inbound.eth;
     network = 'Ethereum / Base (same address works on both)';
     instructions = `Send ETH from your wallet. Converted to USD at receipt. No bridging needed.`;
   } else if (asset === 'ALEO') {
-    depositAddress = INBOUND_ADDRESSES.aleo;
+    depositAddress = inbound.aleo;
     network = 'Aleo mainnet';
     instructions = `Send ALEO from ZKWork, Leo Wallet, or any Aleo-compatible wallet.`;
   } else if (asset === 'SOL') {
-    depositAddress = INBOUND_ADDRESSES.sol;
+    depositAddress = inbound.sol;
     network = 'Solana';
     instructions = depositAddress
       ? `Send SOL from Phantom, Solflare, or any Solana wallet.`
       : `Solana address coming soon. Use USDC (Solana) instead — same address as Base USDC.`;
-    if (!depositAddress) depositAddress = INBOUND_ADDRESSES.usdc_base;
+    if (!depositAddress) depositAddress = inbound.usdc_base;
   } else if (asset === 'BTC') {
-    depositAddress = INBOUND_ADDRESSES.btc;
+    depositAddress = inbound.btc;
     network = 'Bitcoin';
     instructions = depositAddress
       ? `Send BTC from any Bitcoin wallet.`
       : `Bitcoin address coming soon. Contact steve@thehiveryiq.com for large BTC transfers.`;
-    if (!depositAddress) depositAddress = INBOUND_ADDRESSES.usdc_base;
+    if (!depositAddress) depositAddress = inbound.usdc_base;
   } else {
-    depositAddress = INBOUND_ADDRESSES.usdc_base;
+    depositAddress = inbound.usdc_base;
     network = 'Base L2';
     instructions = `Default: send USDC on Base. Works from Coinbase, MetaMask, and all major wallets.`;
   }
