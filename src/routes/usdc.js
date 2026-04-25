@@ -53,6 +53,21 @@ const ledger = {
   failed_attempts:      0,
   last_settled_at:      null,
   last_tx_hash:         null,
+  // Structured failure-reason counters (for distribution analysis)
+  reasons: {
+    success:                       0,
+    expired_pre_check_blocked:     0,   // caught before broadcast — saved gas + saved revenue path
+    not_yet_valid_pre_check:       0,   // validAfter in the future
+    malformed_payload:             0,
+    nonce_replay:                  0,   // duplicate nonce we already processed in-memory
+    chain_revert_expired:          0,   // slipped through and reverted on-chain (should approach 0)
+    chain_revert_other:            0,   // other on-chain revert (sig, nonce-on-chain, balance, etc.)
+    rpc_error:                     0,
+    skipped_no_signer:             0,
+  },
+  // Latency histogram (rough buckets, ms door→broadcast)
+  latency_ms_sum:               0,
+  latency_ms_count:             0,
 };
 
 function recordSettlement(amount_usdc, tx_hash) {
@@ -60,6 +75,45 @@ function recordSettlement(amount_usdc, tx_hash) {
   ledger.total_settled_calls += 1;
   ledger.last_settled_at      = new Date().toISOString();
   ledger.last_tx_hash         = tx_hash;
+  ledger.reasons.success     += 1;
+}
+
+// ─── Idempotency cache (nonce → cached response) ──────────────────────────────
+// Prevents double-broadcast on agent retries. Bounded LRU.
+const NONCE_CACHE_MAX = 5000;
+const nonceCache = new Map(); // nonce(lowercase) → { resp, status, at }
+
+function nonceCacheGet(nonce) {
+  if (!nonce) return null;
+  return nonceCache.get(nonce.toLowerCase()) || null;
+}
+function nonceCacheSet(nonce, status, resp) {
+  if (!nonce) return;
+  const k = nonce.toLowerCase();
+  if (nonceCache.size >= NONCE_CACHE_MAX) {
+    // drop oldest
+    const first = nonceCache.keys().next().value;
+    if (first) nonceCache.delete(first);
+  }
+  nonceCache.set(k, { resp, status, at: Date.now() });
+}
+
+// Classify a downstream error string into a structured reason bucket
+function classifyChainError(errStr) {
+  const s = String(errStr || '').toLowerCase();
+  if (s.includes('authorization is expired') || s.includes('fiattokenv2: authorization is expired')) {
+    return 'chain_revert_expired';
+  }
+  if (s.includes('invalid signature') || s.includes('signature')) {
+    return 'chain_revert_other';
+  }
+  if (s.includes('authorization is used') || s.includes('nonce')) {
+    return 'chain_revert_other';
+  }
+  if (s.includes('econnrefused') || s.includes('etimedout') || s.includes('network') || s.includes('rpc')) {
+    return 'rpc_error';
+  }
+  return 'chain_revert_other';
 }
 
 // ─── DOOR 1: EIP-3009 x402 settlement (primary revenue path) ─────────────────
@@ -67,35 +121,155 @@ function recordSettlement(amount_usdc, tx_hash) {
 // The signed EIP-3009 authorization is submitted to the USDC contract.
 // USDC moves from agent wallet → treasury. On-chain. Permanent.
 
+// Pre-check safety buffer: an authorization must remain valid for at least this many
+// seconds at door-receipt time, otherwise it will likely expire mid-broadcast and
+// revert on-chain (FiatTokenV2: authorization is expired).
+const VALID_BEFORE_SAFETY_SECONDS = 10;
+
 router.post('/submit-authorization', requireInternal, async (req, res) => {
+  const door_t0 = Date.now();
   const { payload, payer_did } = req.body;
-  if (!payload) {
-    return res.status(400).json({ error: 'payload required — must contain authorization + signature' });
+
+  // ─── Stage 0: Shape validation ──────────────────────────────────────────────
+  if (!payload || !payload.authorization || !payload.signature) {
+    ledger.failed_attempts        += 1;
+    ledger.reasons.malformed_payload += 1;
+    return res.status(400).json({
+      settled: false,
+      reason:  'malformed_payload',
+      error:   'payload required — must contain authorization + signature',
+    });
   }
 
-  const amount_raw = payload?.authorization?.value;
+  const auth        = payload.authorization;
+  const amount_raw  = auth.value;
   const amount_usdc = amount_raw ? Number(amount_raw) / 1_000_000 : null;
+  const nonce       = auth.nonce ? String(auth.nonce) : null;
 
-  console.log(`[door:eip3009] Incoming $${amount_usdc ?? '?'} USDC from ${payer_did || 'unknown agent'}`);
-
-  const result = await submitEIP3009Authorization(payload);
-
-  if (result.ok) {
-    recordSettlement(result.amount_usdc, result.tx_hash);
-    console.log(`[door:eip3009] ✅ Materialized $${result.amount_usdc} USDC | tx: ${result.tx_hash} | block: ${result.block}`);
-    return res.json({ settled: true, ...result, treasury: TREASURY });
+  // ─── Stage 1: Idempotency / nonce-replay short-circuit ─────────────────────
+  // If the agent retries (same nonce), return the cached prior response instead of
+  // re-broadcasting. The USDC contract would also reject (nonce already used) but
+  // that costs us a broadcast attempt we do not need to make.
+  const cached = nonceCacheGet(nonce);
+  if (cached) {
+    ledger.reasons.nonce_replay += 1;
+    console.log(`[door:eip3009] ↩  Replay of nonce ${nonce} from ${payer_did || 'unknown'} → returning cached ${cached.status}`);
+    return res.status(cached.status).json({
+      ...cached.resp,
+      replay: true,
+    });
   }
 
-  if (result.skipped) {
-    // HIVE_WALLET_PRIVATE_KEY not set — configuration issue, not a payment issue
+  // ─── Stage 2: Time-window pre-check ─────────────────────────────────────────
+  // Reject expired (or about-to-expire) authorizations BEFORE broadcasting them.
+  // Returning 410 Gone with retry:true tells the agent to re-sign with a fresh
+  // validBefore and resubmit, instead of us paying gas to revert on-chain.
+  const now_s        = Math.floor(Date.now() / 1000);
+  const validBefore  = auth.validBefore != null ? Number(auth.validBefore) : null;
+  const validAfter   = auth.validAfter  != null ? Number(auth.validAfter)  : null;
+
+  if (validBefore == null || !Number.isFinite(validBefore)) {
+    ledger.failed_attempts             += 1;
+    ledger.reasons.malformed_payload   += 1;
+    return res.status(400).json({
+      settled: false,
+      reason:  'malformed_payload',
+      error:   'authorization.validBefore missing or not a number',
+    });
+  }
+
+  const skew_s = validBefore - now_s;
+  if (skew_s < VALID_BEFORE_SAFETY_SECONDS) {
+    ledger.failed_attempts                     += 1;
+    ledger.reasons.expired_pre_check_blocked   += 1;
+    const resp = {
+      settled:      false,
+      retry:        true,
+      reason:       'authorization_expired',
+      server_time:  now_s,
+      validBefore:  validBefore,
+      skew_seconds: skew_s,
+      safety_seconds: VALID_BEFORE_SAFETY_SECONDS,
+      hint:         'Re-sign with validBefore = now + 60s and resubmit.',
+    };
+    console.warn(`[door:eip3009] ⏰ pre-check blocked expired auth | nonce=${nonce} skew=${skew_s}s payer=${payer_did || 'unknown'}`);
+    if (nonce) nonceCacheSet(nonce, 410, resp);
+    return res.status(410).json(resp);
+  }
+
+  if (validAfter != null && Number.isFinite(validAfter) && validAfter > now_s) {
+    ledger.failed_attempts                  += 1;
+    ledger.reasons.not_yet_valid_pre_check  += 1;
+    const resp = {
+      settled:      false,
+      retry:        true,
+      reason:       'authorization_not_yet_valid',
+      server_time:  now_s,
+      validAfter:   validAfter,
+      seconds_until_valid: validAfter - now_s,
+      hint:         'Authorization validAfter is in the future. Wait or re-sign with validAfter <= now.',
+    };
+    console.warn(`[door:eip3009] ⏳ pre-check blocked not-yet-valid | nonce=${nonce} validAfter=${validAfter} now=${now_s}`);
+    return res.status(425).json(resp); // 425 Too Early
+  }
+
+  // ─── Stage 3: Broadcast ─────────────────────────────────────────────────────
+  console.log(`[door:eip3009] Incoming $${amount_usdc ?? '?'} USDC from ${payer_did || 'unknown agent'} | nonce=${nonce} skew=${skew_s}s`);
+
+  let result;
+  try {
+    result = await submitEIP3009Authorization(payload);
+  } catch (err) {
     ledger.failed_attempts += 1;
-    console.warn('[door:eip3009] ⚠️  Skipped — treasury wallet key not configured');
-    return res.status(503).json({ settled: false, ...result });
+    const bucket = classifyChainError(err && err.message);
+    ledger.reasons[bucket] = (ledger.reasons[bucket] || 0) + 1;
+    const door_to_broadcast_ms = Date.now() - door_t0;
+    ledger.latency_ms_sum   += door_to_broadcast_ms;
+    ledger.latency_ms_count += 1;
+    console.error(`[door:eip3009] ❌ broadcast threw | bucket=${bucket} | nonce=${nonce} | ${door_to_broadcast_ms}ms |`, err && err.message);
+    const resp = {
+      settled: false,
+      reason:  bucket,
+      error:   err && err.message,
+      door_to_broadcast_ms,
+    };
+    if (nonce) nonceCacheSet(nonce, 500, resp);
+    return res.status(500).json(resp);
   }
 
+  const door_to_broadcast_ms = Date.now() - door_t0;
+  ledger.latency_ms_sum   += door_to_broadcast_ms;
+  ledger.latency_ms_count += 1;
+
+  // ─── Stage 4: Result handling ──────────────────────────────────────────────
+  if (result && result.ok) {
+    recordSettlement(result.amount_usdc, result.tx_hash);
+    console.log(`[door:eip3009] ✅ Materialized $${result.amount_usdc} USDC | tx: ${result.tx_hash} | block: ${result.block} | ${door_to_broadcast_ms}ms`);
+    const resp = { settled: true, ...result, treasury: TREASURY, door_to_broadcast_ms };
+    if (nonce) nonceCacheSet(nonce, 200, resp);
+    return res.json(resp);
+  }
+
+  if (result && result.skipped) {
+    ledger.failed_attempts             += 1;
+    ledger.reasons.skipped_no_signer   += 1;
+    console.warn('[door:eip3009] ⚠️  Skipped — treasury wallet key not configured');
+    return res.status(503).json({ settled: false, reason: 'skipped_no_signer', ...result });
+  }
+
+  // Generic on-chain failure — classify by error message
   ledger.failed_attempts += 1;
-  console.error('[door:eip3009] ❌ Settlement failed:', result.error);
-  return res.status(500).json({ settled: false, ...result });
+  const bucket = classifyChainError(result && result.error);
+  ledger.reasons[bucket] = (ledger.reasons[bucket] || 0) + 1;
+  console.error(`[door:eip3009] ❌ Settlement failed | bucket=${bucket} | nonce=${nonce} |`, result && result.error);
+  const resp = {
+    settled: false,
+    reason:  bucket,
+    door_to_broadcast_ms,
+    ...result,
+  };
+  if (nonce) nonceCacheSet(nonce, 500, resp);
+  return res.status(500).json(resp);
 });
 
 // ─── DOOR 2: Legacy tx_hash record (pre-EIP-3009 clients) ────────────────────
@@ -229,6 +403,11 @@ router.get('/stats', requireInternal, async (req, res) => {
         : null,
       last_settled_at:     ledger.last_settled_at,
       last_tx_hash:        ledger.last_tx_hash,
+      reasons:             ledger.reasons,
+      avg_door_to_broadcast_ms: ledger.latency_ms_count > 0
+        ? Math.round(ledger.latency_ms_sum / ledger.latency_ms_count)
+        : null,
+      nonce_cache_size:    nonceCache.size,
     },
     onchain: balance.ok ? {
       balance_usdc: balance.balance_usdc,
