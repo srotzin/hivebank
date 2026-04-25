@@ -1,8 +1,13 @@
 // Hivebank /v1/admin/stats — read-only telemetry for the Leak Sentinel cron.
+// 2026-04-25 H3 fix: fail-CLOSED on missing ADMIN_STATS_SECRET. Previously
+// the route was open when the env var was unset, leaking current_epoch,
+// nonce-cache size, daily-cap usage, and kill-switch state to anonymous
+// callers — free targeting telemetry. Production MUST set the secret;
+// dev/local must opt in via SPECTRAL_ZK_BYPASS or set ALLOW_OPEN_STATS=true.
 //
 // Auth: requires header `x-hive-internal: <ADMIN_STATS_SECRET>` (env-gated).
-// Falls back to allowing the call when ADMIN_STATS_SECRET is unset, so dev/local
-// works without ceremony — but in production set the env to lock it down.
+// If ADMIN_STATS_SECRET is unset the endpoint returns 503 unless
+// ALLOW_OPEN_STATS=true is explicitly set (dev/local opt-in only).
 //
 // Exposes: throttle map state, DB circuit breaker state, capture-rate counters.
 // NEVER exposes private keys, nonce values, signatures, or wallet contents.
@@ -84,6 +89,10 @@ function _captureStats() {
 
 router.get('/stats', (req, res) => {
   const secret = process.env.ADMIN_STATS_SECRET;
+  const allowOpen = process.env.ALLOW_OPEN_STATS === 'true';
+  if (!secret && !allowOpen) {
+    return res.status(503).json({ ok: false, error: 'stats endpoint not configured' });
+  }
   if (secret) {
     const got = req.get('x-hive-internal');
     if (got !== secret) return res.status(401).json({ ok: false, error: 'unauthorized' });

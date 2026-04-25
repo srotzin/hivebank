@@ -216,6 +216,9 @@ async function checkOutbound({ toAddress, amountUsdc, hiveDid, reason, route }) 
   // L5 trust gate (DID-based)
   const trust = await trustCheck(hiveDid);
   if (!trust.allow) {
+    // 2026-04-25 M2 fix: spectralCheck already pushed; if L5 denies, pop it so
+    // a low-trust caller cannot poison the rolling regime by repeated attempts.
+    recentSends.pop();
     return finalize(decision, false, 'L5_TRUST',
       `DID ${hiveDid || '<missing>'} did not meet min tier ${TRUST_MIN_TIER} (got ${trust.tier}, ${trust.reason}).`,
       { tier: trust.tier });

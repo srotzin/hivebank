@@ -166,36 +166,72 @@ async function verifyTicket(ticketB64u, intent_hex, recentRing) {
     return { ok: false, code: 'BAD_TICKET_ENCODING', detail: e.message };
   }
 
+  // ── Phase 1: STRUCTURAL checks (cheap, no oracle leakage) ──────────────
   // Required fields
   for (const k of ['v', 'iss', 'epoch', 'regime', 'intent', 'nonce', 'exp', 'sig']) {
     if (!(k in ticket)) {
-      return { ok: false, code: 'MISSING_FIELD', detail: `ticket missing ${k}` };
+      return { ok: false, code: 'INVALID', detail: `malformed ticket` };
     }
   }
   if (ticket.v !== 1) {
-    return { ok: false, code: 'BAD_VERSION', detail: `ticket v=${ticket.v} (want 1)` };
+    return { ok: false, code: 'INVALID', detail: `malformed ticket` };
   }
 
-  // Epoch check
+  // ── Phase 2: SIGNATURE-FIRST ───────────────────────────────────────────
+  // 2026-04-25 H2 fix: every pre-signature branch is an oracle. We verify
+  // the Ed25519 signature BEFORE any of the semantic checks (epoch, intent,
+  // regime, nonce) so an unauthenticated probe gets one opaque INVALID for
+  // every failure mode. Specific error codes are returned only AFTER sig
+  // verifies — those branches indicate a genuinely-issued-but-stale ticket
+  // and the leakage is bounded to the legitimate issuer.
+  const { sig, ...signed } = ticket;
+  const bytes = canonicalBytes(signed);
+  let sigOk;
+  try {
+    const pk = b64uToBytes(VERIFIER_PK_B64U);
+    sigOk = await ed.verifyAsync(b64uToBytes(sig), bytes, pk);
+  } catch (e) {
+    return { ok: false, code: 'INVALID', detail: 'ticket invalid' };
+  }
+  if (!sigOk) {
+    return { ok: false, code: 'INVALID', detail: 'ticket invalid' };
+  }
+
+  // ── Phase 3: NONCE CLAIM (TOCTOU-safe) ─────────────────────────────────
+  // 2026-04-25 H1 fix: claim the nonce BEFORE any further async work in a
+  // synchronous slice with no `await` between has() and set(). N concurrent
+  // verifies of the same valid ticket race here — exactly one wins.
+  pruneNonces();
+  if (nonceSeen.has(ticket.nonce)) {
+    return { ok: false, code: 'NONCE_REPLAY',
+             detail: `nonce already used` };
+  }
+  nonceSeen.set(ticket.nonce, Date.now() + NONCE_TTL_MS);
+
+  // ── Phase 4: SEMANTIC checks (post-signature, post-claim) ──────────────
+  // From here on we know the ticket was issuer-signed; specific error codes
+  // are safe.
   const epNow = currentEpoch();
   if (epochsApart(ticket.epoch, epNow) > EPOCH_DRIFT) {
+    nonceSeen.delete(ticket.nonce);
     return { ok: false, code: 'EPOCH_DRIFT',
              detail: `ticket.epoch=${ticket.epoch} now=${epNow} drift>${EPOCH_DRIFT}` };
   }
 
-  // Expiry check
   const expMs = Date.parse(ticket.exp);
   if (!Number.isFinite(expMs) || expMs < Date.now()) {
+    nonceSeen.delete(ticket.nonce);
     return { ok: false, code: 'EXPIRED',
              detail: `ticket.exp=${ticket.exp} (now ${new Date().toISOString()})` };
   }
   if (expMs - Date.now() > TICKET_EXP_MAX_S * 1000) {
+    nonceSeen.delete(ticket.nonce);
     return { ok: false, code: 'EXP_TOO_LONG',
              detail: `ticket exp window > ${TICKET_EXP_MAX_S}s` };
   }
 
-  // Intent hash check
   if (String(ticket.intent).toLowerCase() !== String(intent_hex).toLowerCase()) {
+    nonceSeen.delete(ticket.nonce);
     return { ok: false, code: 'INTENT_MISMATCH',
              detail: `ticket.intent ≠ sha256(request)` };
   }
@@ -204,34 +240,11 @@ async function verifyTicket(ticketB64u, intent_hex, recentRing) {
   // A captured ticket from a different regime epoch is rejected.
   const live = liveRegime(recentRing);
   if (String(ticket.regime).toUpperCase() !== String(live).toUpperCase()) {
+    nonceSeen.delete(ticket.nonce);
     return { ok: false, code: 'REGIME_MISMATCH',
              detail: `ticket.regime=${ticket.regime} live=${live}` };
   }
 
-  // Replay check
-  pruneNonces();
-  if (nonceSeen.has(ticket.nonce)) {
-    return { ok: false, code: 'NONCE_REPLAY',
-             detail: `nonce ${ticket.nonce} already used` };
-  }
-
-  // Signature check — sign over canonicalized ticket minus `sig`
-  const { sig, ...signed } = ticket;
-  const bytes = canonicalBytes(signed);
-  let sigOk;
-  try {
-    const pk = b64uToBytes(VERIFIER_PK_B64U);
-    sigOk = await ed.verifyAsync(b64uToBytes(sig), bytes, pk);
-  } catch (e) {
-    return { ok: false, code: 'SIG_VERIFY_ERROR', detail: e.message };
-  }
-  if (!sigOk) {
-    return { ok: false, code: 'BAD_SIGNATURE',
-             detail: 'Ed25519 signature did not verify under SPECTRAL_VERIFIER_PK_B64U' };
-  }
-
-  // Commit nonce — single use
-  nonceSeen.set(ticket.nonce, Date.now() + NONCE_TTL_MS);
   return {
     ok: true, code: 'OK',
     detail: `ticket valid (epoch=${ticket.epoch}, regime=${ticket.regime})`,
