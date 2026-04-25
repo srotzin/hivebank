@@ -30,6 +30,7 @@ const budgetRoutes = require('./routes/budget');
 const creditRoutes = require('./routes/credit');
 const streamingRoutes = require('./routes/streaming');
 const statsRoutes = require('./routes/stats');
+const adminStatsRoutes = require('./routes/admin-stats');
 const perfCreditRoutes = require('./routes/perf-credit');
 const bondsRoutes = require('./routes/bonds');
 const cashbackRoutes = require('./routes/cashback');
@@ -404,6 +405,8 @@ app.get('/v1/bank/streams/:did', authMiddleware, async (req, res) => {
 });
 
 app.use('/v1/bank/stats', authMiddleware, statsRoutes);
+// Read-only telemetry for the Leak Sentinel cron. Env-gated, no auth middleware.
+app.use('/v1/admin', adminStatsRoutes);
 
 // Performance-based credit lines (DeepSeek Concierge Strategy)
 // Public stats endpoint (no auth)

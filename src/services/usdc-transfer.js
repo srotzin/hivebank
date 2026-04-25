@@ -444,4 +444,16 @@ async function submitEIP3009Authorization(payload) {
   }
 }
 
-module.exports = { sendUSDC, checkUSDCBalance, testTransfer, logSend, submitEIP3009Authorization };
+// Sentinel hook: read-only DB circuit breaker state for the leak watcher.
+function _dbBreakerStats() {
+  const now = Date.now();
+  const openUntil = logSend._dbCircuitOpenUntil || 0;
+  const open = openUntil > now;
+  return {
+    db_circuit_open:       open,
+    db_circuit_open_for_s: open ? Math.round((openUntil - now) / 1000) : 0,
+    db_failures:           logSend._dbFailures || 0,
+  };
+}
+
+module.exports = { sendUSDC, checkUSDCBalance, testTransfer, logSend, submitEIP3009Authorization, _dbBreakerStats };

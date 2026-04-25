@@ -173,8 +173,18 @@ function classifyChainError(errStr) {
 // 100% revert. Everything else: GRAB IT. Don't leave money on the floor.
 const VALID_BEFORE_SAFETY_SECONDS = 0;
 
+// Sentinel capture-rate hook (lazy require to avoid circular import).
+let _adminBump = null;
+function _bumpCapture(kind) {
+  try {
+    if (!_adminBump) _adminBump = require('./admin-stats')._bumpCapture;
+    if (_adminBump) _adminBump(kind);
+  } catch (e) { /* best-effort, never throw from sentinel hook */ }
+}
+
 router.post('/submit-authorization', requireInternal, async (req, res) => {
   const door_t0 = Date.now();
+  _bumpCapture('request');
   const { payload, payer_did } = req.body;
 
   // ─── Stage 0: Shape validation ──────────────────────────────────────────────
@@ -336,6 +346,7 @@ router.post('/submit-authorization', requireInternal, async (req, res) => {
   // ─── Stage 4: Result handling ──────────────────────────────────────────────
   if (result && result.ok) {
     recordSettlement(result.amount_usdc, result.tx_hash);
+    _bumpCapture('capture');
     console.log(`[door:eip3009] ✅ Materialized $${result.amount_usdc} USDC | tx: ${result.tx_hash} | block: ${result.block} | ${door_to_broadcast_ms}ms`);
     const resp = { settled: true, ...result, treasury: TREASURY, door_to_broadcast_ms };
     if (nonce) nonceCacheSet(nonce, 200, resp);
@@ -369,6 +380,7 @@ router.post('/submit-authorization', requireInternal, async (req, res) => {
 // We verify on-chain and record the inbound payment.
 
 router.post('/record-x402', requireInternal, async (req, res) => {
+  _bumpCapture('request');
   const { tx_hash, amount_usdc, payer } = req.body;
   if (!tx_hash || !amount_usdc) {
     return res.status(400).json({ error: 'tx_hash and amount_usdc required' });
@@ -387,6 +399,7 @@ router.post('/record-x402', requireInternal, async (req, res) => {
   });
 
   recordSettlement(Number(amount_usdc), tx_hash);
+  _bumpCapture('capture');
 
   res.json({
     ok:          true,
@@ -402,6 +415,7 @@ router.post('/record-x402', requireInternal, async (req, res) => {
 // HiveForge, inter-service sweeps. Records without re-submitting (tx already on-chain).
 
 router.post('/inbound', requireInternal, async (req, res) => {
+  _bumpCapture('request');
   const { tx_hash, amount_usdc, from_did, source, memo } = req.body;
   if (!amount_usdc || Number(amount_usdc) <= 0) {
     return res.status(400).json({ error: 'amount_usdc required and must be > 0' });
@@ -422,6 +436,7 @@ router.post('/inbound', requireInternal, async (req, res) => {
   });
 
   recordSettlement(amt, tx_hash || null);
+  _bumpCapture('capture');
 
   res.json({
     ok:          true,
@@ -452,6 +467,7 @@ router.post('/sweep', requireInternal, async (req, res) => {
       const result = await submitEIP3009Authorization(payload);
       if (result.ok) {
         recordSettlement(result.amount_usdc, result.tx_hash);
+        _bumpCapture('capture');
         console.log(`[door:sweep] ✅ [${i}] $${result.amount_usdc} USDC | tx: ${result.tx_hash}`);
       } else {
         ledger.failed_attempts += 1;
@@ -651,4 +667,28 @@ router.post('/test', requireInternal, async (req, res) => {
   });
 });
 
+// Sentinel hook: read-only stats for the leak watcher cron.
+// Never exposes nonce values, signatures, or PII — just sizes/counters.
+function _throttleStats() {
+  let totalReplays = 0;
+  let maxSources = 0;
+  let bucketsAtLimit = 0;
+  for (const [, v] of nonceCache) {
+    totalReplays += (v.replays || 0);
+    const s = v.sources ? v.sources.size : 0;
+    if (s > maxSources) maxSources = s;
+    if (s >= NONCE_SOURCES_MAX - 4) bucketsAtLimit += 1;
+  }
+  return {
+    nonce_cache_size:       nonceCache.size,
+    nonce_cache_max:        NONCE_CACHE_MAX,
+    nonce_sources_max:      NONCE_SOURCES_MAX,
+    nonce_cache_ttl_ms:     NONCE_CACHE_TTL_MS,
+    total_replays_observed: totalReplays,
+    max_sources_in_any_bucket: maxSources,
+    buckets_near_source_cap:   bucketsAtLimit,
+    pct_full: Math.round((nonceCache.size / NONCE_CACHE_MAX) * 100),
+  };
+}
 module.exports = router;
+module.exports._throttleStats = _throttleStats;
