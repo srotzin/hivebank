@@ -30,9 +30,10 @@ const CAP_MAX_EVENTS = 4096;
 
 function _bumpCapture(kind) {
   // kind:
-  //   'request_real'   = inbound paying call that reached settlement path
-  //   'request_replay' = inbound that hit nonce-replay short-circuit (no leak)
-  //   'capture'        = settled successfully on chain
+  //   'request_real'    = inbound paying call that reached settlement path
+  //   'request_replay'  = inbound that hit nonce-replay short-circuit (no leak)
+  //   'request_expired' = inbound rejected by time-window pre-check (no leak)
+  //   'capture'         = settled successfully on chain
   // Legacy 'request' is treated as request_real for back-compat.
   const k = (kind === 'request') ? 'request_real' : kind;
   const now = Date.now();
@@ -49,22 +50,27 @@ function _bumpCapture(kind) {
 function _captureStats() {
   const now = Date.now();
   const cutoff = now - CAP_WINDOW_MS;
-  let real = 0, replay = 0, cap = 0;
+  let real = 0, replay = 0, expired = 0, cap = 0;
   for (const e of captureWindow.events) {
     if (e.t < cutoff) continue;
-    if (e.kind === 'request_real')        real += 1;
-    else if (e.kind === 'request_replay') replay += 1;
-    else if (e.kind === 'capture')        cap += 1;
+    if (e.kind === 'request_real')         real    += 1;
+    else if (e.kind === 'request_replay')  replay  += 1;
+    else if (e.kind === 'request_expired') expired += 1;
+    else if (e.kind === 'capture')         cap     += 1;
   }
-  // Leak = real paying traffic but zero captures sustained over the window.
-  // Replays are by-design non-captures (looper) and must NOT trigger leak alarm.
+  // Leak = real, viable paying traffic but zero captures sustained over the window.
+  // Replays + expired/not-yet-valid auths are by-design non-captures and must NOT
+  // trigger the leak alarm — those are client-side mistakes, not service leaks.
+  const total = real + replay + expired;
   return {
-    requests_real_60min:   real,
-    requests_replay_60min: replay,
-    captures_60min:        cap,
-    capture_rate:          real === 0 ? 1 : cap / real,
-    replay_share:          (real + replay) === 0 ? 0 : replay / (real + replay),
-    leak_suspected:        real >= 5 && cap === 0,
+    requests_real_60min:    real,
+    requests_replay_60min:  replay,
+    requests_expired_60min: expired,
+    captures_60min:         cap,
+    capture_rate:           real === 0 ? 1 : cap / real,
+    replay_share:           total === 0 ? 0 : replay  / total,
+    expired_share:          total === 0 ? 0 : expired / total,
+    leak_suspected:         real >= 5 && cap === 0,
   };
 }
 

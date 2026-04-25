@@ -263,10 +263,12 @@ router.post('/submit-authorization', requireInternal, async (req, res) => {
     });
   }
 
-  // Fresh nonce → real paying traffic. Bump now; settlement path will bump 'capture' on success.
-  _bumpCapture('request_real');
-
   // ─── Stage 2: Time-window pre-check ─────────────────────────────────────────
+  // NOTE: We do NOT bump 'request_real' yet. An auth that's already-dead or
+  // not-yet-valid is by-design a non-capture (the client must re-sign). Counting
+  // it as real traffic against the leak heuristic would create false alarms
+  // whenever an agent loops a stale validBefore. We bump 'request_real' below,
+  // only AFTER the auth passes time-window pre-checks and is viable for settlement.
   // Reject expired (or about-to-expire) authorizations BEFORE broadcasting them.
   // Returning 410 Gone with retry:true tells the agent to re-sign with a fresh
   // validBefore and resubmit, instead of us paying gas to revert on-chain.
@@ -302,6 +304,7 @@ router.post('/submit-authorization', requireInternal, async (req, res) => {
     };
     console.warn(`[door:eip3009] ⏰ already-dead auth blocked | nonce=${nonce} skew=${skew_s}s payer=${payer_did || 'unknown'}`);
     if (nonce) nonceCacheSet(nonce, 410, resp);
+    _bumpCapture('request_expired'); // dead-auth: by-design non-capture, NOT a leak signal
     return res.status(410).json(resp);
   }
 
@@ -318,8 +321,13 @@ router.post('/submit-authorization', requireInternal, async (req, res) => {
       hint:         'Authorization validAfter is in the future. Wait or re-sign with validAfter <= now.',
     };
     console.warn(`[door:eip3009] ⏳ pre-check blocked not-yet-valid | nonce=${nonce} validAfter=${validAfter} now=${now_s}`);
+    _bumpCapture('request_expired'); // not-yet-valid: by-design non-capture, NOT a leak signal
     return res.status(425).json(resp); // 425 Too Early
   }
+
+  // Auth passed time-window checks → real, viable paying traffic.
+  // Settlement path will bump 'capture' on success; if it fails after this, it's a real leak signal.
+  _bumpCapture('request_real');
 
   // ─── Stage 3: Broadcast ─────────────────────────────────────────────────────
   console.log(`[door:eip3009] Incoming $${amount_usdc ?? '?'} USDC from ${payer_did || 'unknown agent'} | nonce=${nonce} skew=${skew_s}s`);
