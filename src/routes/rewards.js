@@ -26,8 +26,8 @@ const TRIGGERS = {
 };
 const VALID_TRIGGERS = Object.keys(TRIGGERS);
 const REWARD_AMOUNT_USDC = 1.00;
-const INTERNAL_KEY = process.env.HIVE_INTERNAL_KEY ||
-  'hive_internal_125e04e071e8829be631ea0216dd4a0c9b707975fcecaf8c62c6a2ab43327d46';
+// Leaked-key purge 2026-04-25: lazy read, fail closed if env missing.
+const { getInternalKey } = require('../lib/internal-key');
 
 // ─── DNA stamp ────────────────────────────────────────────────────────────────
 function dnaStamp(trigger, did, wallet_address) {
@@ -50,7 +50,7 @@ function dnaStamp(trigger, did, wallet_address) {
 function rewardsAuth(req, res, next) {
   const key = req.headers['x-hive-internal'];
   const did = req.headers['x-hive-did'] || req.body?.did;
-  if ((key && key === INTERNAL_KEY) || did) return next();
+  if ((key && key === getInternalKey()) || did) return next();
   return res.status(401).json({
     status: 'error', error: 'AUTH_REQUIRED',
     detail: 'Provide x-hive-internal (internal) or x-hive-did (agent).',
@@ -58,7 +58,7 @@ function rewardsAuth(req, res, next) {
 }
 function internalOnly(req, res, next) {
   const key = req.headers['x-hive-internal'];
-  if (key && key === INTERNAL_KEY) return next();
+  if (key && key === getInternalKey()) return next();
   return res.status(401).json({ status: 'error', error: 'INTERNAL_KEY_REQUIRED' });
 }
 

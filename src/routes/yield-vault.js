@@ -20,8 +20,8 @@ const express = require('express');
 const router  = express.Router();
 const yieldVault = require('../services/yield-vault');
 
-const INTERNAL_KEY = process.env.HIVE_INTERNAL_KEY ||
-  'hive_internal_125e04e071e8829be631ea0216dd4a0c9b707975fcecaf8c62c6a2ab43327d46';
+// Leaked-key purge 2026-04-25: lazy read, fail closed if env missing.
+const { getInternalKey } = require('../lib/internal-key');
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  PUBLIC ENDPOINTS (no auth)
@@ -112,7 +112,7 @@ router.post('/withdraw', async (req, res) => {
 // POST /v1/bank/vault/rebalance
 router.post('/rebalance', async (req, res) => {
   const key = req.headers['x-hive-internal'];
-  if (!key || key !== INTERNAL_KEY) {
+  if (!key || key !== getInternalKey()) {
     return res.status(401).json({
       success: false,
       error: 'INTERNAL_AUTH_REQUIRED',

@@ -104,7 +104,7 @@ POST /v1/bank/vault/rebalance     — manual trigger (x-hive-internal header req
 ## Auth
 
 deposit/withdraw:  did in body — public
-rebalance trigger: x-hive-internal == hive_internal_125e04e071e8829be631ea0216dd4a0c9b707975fcecaf8c62c6a2ab43327d46
+rebalance trigger: x-hive-internal must equal $HIVE_INTERNAL_KEY env (rotated 2026-04-25; prior key DEAD)
 rates / stats:     fully public
 
 ## Phase 2 Activation (Coinbase CDP)

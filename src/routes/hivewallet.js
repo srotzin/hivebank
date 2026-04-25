@@ -73,8 +73,8 @@ const db       = require('../services/db');
 const vault    = require('../services/vault');
 const { sendUSDC, checkUSDCBalance } = require('../services/usdc-transfer');
 
-const INTERNAL_KEY = process.env.HIVE_INTERNAL_KEY ||
-  'hive_internal_125e04e071e8829be631ea0216dd4a0c9b707975fcecaf8c62c6a2ab43327d46';
+// Leaked-key purge 2026-04-25: lazy read, fail closed if env missing.
+const { getInternalKey } = require('../lib/internal-key');
 const HIVEBANK_URL = process.env.HIVEBANK_URL || 'https://hivebank.onrender.com';
 const HIVEGATE_URL = process.env.HIVEGATE_URL || 'https://hivegate.onrender.com';
 
@@ -141,7 +141,7 @@ ensureTables().catch(e => console.error('[HiveWallet] table init:', e));
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function walletId(did) {
-  return 'hw_' + crypto.createHmac('sha256', INTERNAL_KEY)
+  return 'hw_' + crypto.createHmac('sha256', getInternalKey())
     .update(did).digest('hex').slice(0, 16);
 }
 
@@ -151,14 +151,14 @@ function txId() {
 
 function cloazkCert(from, to, amount, rail) {
   const payload = JSON.stringify({ from, to, amount, rail, ts: new Date().toISOString(), nonce: crypto.randomBytes(6).toString('hex') });
-  const hash = crypto.createHmac('sha256', INTERNAL_KEY).update(payload).digest('hex');
+  const hash = crypto.createHmac('sha256', getInternalKey()).update(payload).digest('hex');
   return `cloazk:wallet:${hash}`;
 }
 
 function requireAuth(req, res, next) {
   const key = req.headers['x-hive-internal'] || req.headers['x-hive-key'];
   const did = req.headers['x-hive-did'];
-  if (key === INTERNAL_KEY) { req._auth = 'internal'; return next(); }
+  if (key && key === getInternalKey()) { req._auth = 'internal'; return next(); }
   if (did) { req._auth = 'did'; req._did = did; return next(); }
   return res.status(401).json({ error: 'x-hive-did or x-hive-internal required' });
 }

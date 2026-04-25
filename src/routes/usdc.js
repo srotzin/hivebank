@@ -31,14 +31,14 @@ const { sendUSDC, checkUSDCBalance, submitEIP3009Authorization, logSend } = requ
 
 // ─── Auth ─────────────────────────────────────────────────────────────────────
 
-const INTERNAL_KEY = process.env.HIVE_INTERNAL_KEY ||
-  'hive_internal_125e04e071e8829be631ea0216dd4a0c9b707975fcecaf8c62c6a2ab43327d46';
+// Leaked-key purge 2026-04-25: lazy read, fail closed if env missing.
+const { getInternalKey } = require('../lib/internal-key');
 
 const TREASURY = process.env.HOUSE_WALLET || '0xE5588c407b6AdD3E83ce34190C77De20eaC1BeFe';
 
 function requireInternal(req, res, next) {
   const key = req.headers['x-hive-internal'] || req.headers['x-hive-key'];
-  if (!key || key !== INTERNAL_KEY) {
+  if (!key || key !== getInternalKey()) {
     return res.status(403).json({ error: 'Forbidden — internal key required' });
   }
   next();

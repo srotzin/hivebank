@@ -16,7 +16,7 @@ const express = require('express');
 async function maybeFireFirstSettleReward({ did, wallet_address, amount_usdc }) {
   if (!did || !wallet_address || parseFloat(amount_usdc) < 1) return;
   const HIVEBANK_URL = process.env.HIVEBANK_URL || 'https://hivebank.onrender.com';
-  const KEY = process.env.HIVE_INTERNAL_KEY || 'hive_internal_125e04e071e8829be631ea0216dd4a0c9b707975fcecaf8c62c6a2ab43327d46';
+  const KEY = require('../lib/internal-key').getInternalKey();
   try {
     await fetch(HIVEBANK_URL + '/v1/bank/rewards/claim', {
       method: 'POST',
@@ -311,8 +311,8 @@ router.post('/settle', (req, res) => {
 //  - Returns settlement receipt with zk_receipt field and hahs_compliant: true
 // ══════════════════════════════════════════════════════════════
 
-const HIVE_INTERNAL_KEY_AUTO = process.env.HIVE_INTERNAL_KEY ||
-  'hive_internal_125e04e071e8829be631ea0216dd4a0c9b707975fcecaf8c62c6a2ab43327d46';
+// Leaked-key purge 2026-04-25: lazy read, fail closed if env missing.
+const { getInternalKey: _getKey_settlement } = require('../lib/internal-key');
 
 function generateZkReceipt(agreementId, amountUsdc, fromDid, toDid) {
   // ZK receipt proves "amount > 0 was transferred" without revealing the exact amount.
@@ -351,7 +351,7 @@ router.post('/settle/auto', (req, res) => {
 
   // Authorization: x-hive-internal header OR hahs_agreement_id present (HAHS pre-authorized)
   const internalKey = req.headers['x-hive-internal'];
-  const isInternal  = (internalKey && internalKey === HIVE_INTERNAL_KEY_AUTO);
+  const isInternal  = (internalKey && internalKey === _getKey_settlement());
   const isHahs      = !!hahs_agreement_id;
 
   if (!isInternal && !isHahs) {

@@ -5,7 +5,8 @@ const express = require('express');
 const crypto  = require('crypto');
 const router  = express.Router();
 
-const INTERNAL_KEY = process.env.HIVE_INTERNAL_KEY || 'hive_internal_125e04e071e8829be631ea0216dd4a0c9b707975fcecaf8c62c6a2ab43327d46';
+// Leaked-key purge 2026-04-25: lazy read, fail closed if env missing.
+const { getInternalKey } = require('../lib/internal-key');
 
 // ─── Message types & statuses ─────────────────────────────────────────────────
 const MESSAGE_TYPES = ['offer','counter_offer','acceptance','rejection','inquiry','contract_proposal','payment_request','receipt'];
@@ -81,7 +82,7 @@ function x402Gate(price, description) {
   return (req, res, next) => {
     if (price === 0) return next();
     const internalKey = req.headers['x-hive-internal'] || req.headers['x-hive-internal-key'] || req.headers['x-api-key'];
-    if (internalKey === INTERNAL_KEY) return next();
+    if (internalKey && internalKey === getInternalKey()) return next();
     const payment = req.headers['x-payment'] || req.headers['x-402-payment'];
     if (!payment) {
       return res.status(402).json({
