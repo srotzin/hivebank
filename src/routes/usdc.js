@@ -33,8 +33,8 @@ const { sendUSDC, checkUSDCBalance, submitEIP3009Authorization, logSend } = requ
 
 // Leaked-key purge 2026-04-25: lazy read, fail closed if env missing.
 const { getInternalKey } = require('../lib/internal-key');
-
-const TREASURY = process.env.HOUSE_WALLET || '0xE5588c407b6AdD3E83ce34190C77De20eaC1BeFe';
+// Treasury-fallback purge 2026-04-25: lazy read, fail closed if env missing.
+const { getTreasuryAddress } = require('../lib/treasury');
 
 function requireInternal(req, res, next) {
   const key = req.headers['x-hive-internal'] || req.headers['x-hive-key'];
@@ -362,7 +362,7 @@ router.post('/submit-authorization', requireInternal, async (req, res) => {
     recordSettlement(result.amount_usdc, result.tx_hash);
     _bumpCapture('capture');
     console.log(`[door:eip3009] ✅ Materialized $${result.amount_usdc} USDC | tx: ${result.tx_hash} | block: ${result.block} | ${door_to_broadcast_ms}ms`);
-    const resp = { settled: true, ...result, treasury: TREASURY, door_to_broadcast_ms };
+    const resp = { settled: true, ...result, treasury: getTreasuryAddress(), door_to_broadcast_ms };
     if (nonce) nonceCacheSet(nonce, 200, resp);
     return res.json(resp);
   }
@@ -403,7 +403,7 @@ router.post('/record-x402', requireInternal, async (req, res) => {
   console.log(`[door:record-x402] $${amount_usdc} USDC | tx: ${tx_hash} | payer: ${payer || 'unknown'}`);
 
   await logSend({
-    toAddress:  TREASURY,
+    toAddress:  getTreasuryAddress(),
     amountUsdc: Number(amount_usdc),
     reason:     'x402_inbound',
     txHash:     tx_hash,
@@ -420,7 +420,7 @@ router.post('/record-x402', requireInternal, async (req, res) => {
     recorded:    true,
     tx_hash,
     amount_usdc: Number(amount_usdc),
-    treasury:    TREASURY,
+    treasury:    getTreasuryAddress(),
   });
 });
 
@@ -439,7 +439,7 @@ router.post('/inbound', requireInternal, async (req, res) => {
   console.log(`[door:inbound] $${amt} USDC declared | source: ${source || 'unknown'} | from: ${from_did || 'unknown'}`);
 
   await logSend({
-    toAddress:  TREASURY,
+    toAddress:  getTreasuryAddress(),
     amountUsdc: amt,
     reason:     source || 'inbound_declared',
     txHash:     tx_hash || null,
@@ -457,7 +457,7 @@ router.post('/inbound', requireInternal, async (req, res) => {
     recorded:    true,
     amount_usdc: amt,
     source:      source || 'inbound_declared',
-    treasury:    TREASURY,
+    treasury:    getTreasuryAddress(),
     declared_at: new Date().toISOString(),
   });
 });
@@ -504,7 +504,7 @@ router.post('/sweep', requireInternal, async (req, res) => {
     settled_count:    settled.length,
     failed_count:     failed.length,
     total_usdc:       parseFloat(total.toFixed(6)),
-    treasury:         TREASURY,
+    treasury:         getTreasuryAddress(),
     results:          results.map(r => r.value || { ok: false, error: r.reason?.message }),
     swept_at:         new Date().toISOString(),
   });
@@ -515,7 +515,7 @@ router.post('/sweep', requireInternal, async (req, res) => {
 router.get('/stats', requireInternal, async (req, res) => {
   const balance = await checkUSDCBalance().catch(() => ({ ok: false }));
   res.json({
-    treasury:              TREASURY,
+    treasury:              getTreasuryAddress(),
     session: {
       total_settled_usdc:  parseFloat(ledger.total_settled_usdc.toFixed(6)),
       total_settled_calls: ledger.total_settled_calls,
@@ -533,7 +533,7 @@ router.get('/stats', requireInternal, async (req, res) => {
     },
     onchain: balance.ok ? {
       balance_usdc: balance.balance_usdc,
-      explorer:     `https://basescan.org/address/${TREASURY}`,
+      explorer:     `https://basescan.org/address/${getTreasuryAddress()}`,
     } : { error: 'balance check failed' },
     note: 'Session stats reset on redeploy. On-chain balance is the source of truth.',
   });
@@ -573,7 +573,7 @@ router.get('/diag', requireInternal, async (req, res) => {
     COINBASE_API_KEY_NAME_set:      !!process.env.COINBASE_API_KEY_NAME,
     ethers_ok:                      ethersOk,
     ethers_version:                 ethersVersion,
-    treasury:                       TREASURY,
+    treasury:                       getTreasuryAddress(),
     doors: ['eip3009', 'record-x402', 'inbound', 'sweep'],
   });
 });
