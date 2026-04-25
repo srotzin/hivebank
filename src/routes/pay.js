@@ -379,7 +379,13 @@ router.post('/', async (req, res) => {
     // Optional: trigger on-chain exit if recipient wants external settlement
     let onChain = null;
     if (exit_now && toWallet.evm_address) {
-      onChain = await sendUSDC(toWallet.evm_address, netAmount, { memo: memo || `HivePay ${pid}` }).catch(e => ({ error: e.message }));
+      onChain = await sendUSDC(toWallet.evm_address, netAmount, {
+        memo: memo || `HivePay ${pid}`,
+        reason: 'hivepay_exit',
+        hive_did: to_did,
+        route: 'pay/exit_now',
+        spectralTicket: req.get('x-spectral-zk-ticket') || null,
+      }).catch(e => ({ error: e.message }));
     }
 
     res.json({

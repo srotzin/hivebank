@@ -23,6 +23,11 @@ const https   = require('https');
 const { ethers } = require('ethers');
 const db      = require('./db');
 
+// ─── Spectral hardening (post-2026-04-25 incident) ──────────────────────────
+// Six-layer guard + Spectral ZK ticket verifier. See HARDENING.md.
+const outboundGuard = require('./outbound-guard');
+const spectralZk    = require('./spectral-zk-auth');
+
 // ─── Config ──────────────────────────────────────────────────────────────────
 const WALLET_PRIVATE_KEY  = process.env.HIVE_WALLET_PRIVATE_KEY;   // 0x-prefixed
 const API_KEY_NAME        = process.env.COINBASE_API_KEY_NAME;
@@ -278,6 +283,57 @@ async function sendUSDC(toAddress, amountUsdc, opts = {}) {
     return { ok: false, skipped: true, paused: true, reason: 'USDC_SENDS_PAUSED=true', amount_usdc: amountUsdc, to: toAddress };
   }
   if (!toAddress || amountUsdc <= 0) return { ok: false, error: 'Invalid address or amount' };
+
+  // ── Spectral Hardened Outbound Defense (SHOD) — 6-layer guard ────────────
+  // L0 kill, L1 allowlist, L2 daily cap, L3 per-recipient cap, L4 spectral
+  // anomaly, L5 trust gate. Any deny short-circuits BEFORE chain interaction.
+  const guard = await outboundGuard.checkOutbound({
+    toAddress,
+    amountUsdc,
+    hiveDid: opts.hive_did || null,
+    reason:  opts.reason   || 'hive_transfer',
+    route:   opts.route    || 'unknown',
+  });
+  if (!guard.allow) {
+    await logSend({
+      toAddress, amountUsdc,
+      reason: opts.reason || 'hive_transfer',
+      txHash: null, txId: null, status: 'denied:' + guard.code,
+      hiveDid: opts.hive_did || null, hiveMemo: opts.memo || null,
+    }).catch(() => {});
+    return {
+      ok: false, blocked: true, code: guard.code, error: guard.detail,
+      amount_usdc: amountUsdc, to: toAddress,
+    };
+  }
+
+  // ── Spectral ZK ticket — outbound auth bound to live spectral epoch ──────
+  // Ticket is signed offline by HiveTrust (separate service, separate key).
+  // Even total hivebank compromise cannot forge tickets — defeats the
+  // HIVE_INTERNAL_KEY-only attack vector that drained $99.99.
+  const intent_hex = spectralZk.intentHash({
+    toAddress,
+    amountUsdc,
+    reason:  opts.reason   || 'hive_transfer',
+    hiveDid: opts.hive_did || null,
+  });
+  const zk = await spectralZk.verifyTicket(
+    opts.spectralTicket || null,
+    intent_hex,
+    outboundGuard.getRecentRing(),
+  );
+  if (!zk.ok) {
+    await logSend({
+      toAddress, amountUsdc,
+      reason: opts.reason || 'hive_transfer',
+      txHash: null, txId: null, status: 'denied:zk:' + zk.code,
+      hiveDid: opts.hive_did || null, hiveMemo: opts.memo || null,
+    }).catch(() => {});
+    return {
+      ok: false, blocked: true, code: 'ZK_' + zk.code, error: zk.detail,
+      amount_usdc: amountUsdc, to: toAddress, intent: intent_hex,
+    };
+  }
 
   const rateCheck = checkRateLimit(toAddress, amountUsdc);
   if (!rateCheck.allowed) return { ok: false, error: rateCheck.reason, rate_limited: true };

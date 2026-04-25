@@ -61,7 +61,7 @@ async function recordReferral(new_agent_did, referrer_did) {
  * Convert a referral — called when a referred agent makes their first paid transaction.
  * Issues 1 free credit ($1 USDC) into the referrer's vault.
  */
-async function convertReferral(new_agent_did) {
+async function convertReferral(new_agent_did, outboundCtx = {}) {
   try {
     const referral = await db.getOne(
       "SELECT * FROM referrals WHERE new_agent_did = $1 AND status = 'pending'",
@@ -117,7 +117,10 @@ async function convertReferral(new_agent_did) {
           console.log(`[referral] Sending ${REFERRAL_CREDIT_USDC} USDC on-chain → ${referrer_evm}`);
           onchain_result = await sendUSDC(referrer_evm, REFERRAL_CREDIT_USDC, {
             reason: `referral_credit:${referral.referral_id}`,
-            referral_id: referral.referral_id
+            referral_id: referral.referral_id,
+            hive_did: referral.referrer_did || null,
+            route: 'referral/convert',
+            spectralTicket: outboundCtx.spectralTicket || null,
           });
           if (onchain_result.ok) {
             // Persist tx_hash and updated credit_issued_at into referrals row
