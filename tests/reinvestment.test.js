@@ -1,7 +1,8 @@
 const http = require('http');
 
 const PORT = 3099;
-const AUTH_HEADER = 'hive_internal_125e04e071e8829be631ea0216dd4a0c9b707975fcecaf8c62c6a2ab43327d46';
+// Test-only key. Production-leaked key (DEAD) was hive_internal_125e04e0...327d46.
+const AUTH_HEADER = 'hive_internal_test_' + 'a'.repeat(60);
 
 // Override env before requiring server (server.js calls app.listen on require)
 process.env.PORT = PORT;

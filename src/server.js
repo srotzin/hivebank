@@ -524,14 +524,10 @@ app.use('/v1/bank/ai', aiTransferBriefRoutes);
 
 // ─── $1 Ladder Rewards already registered above treasury catch-all ──────────────
 // ─── Internal: recent USDC sends log ──────────────────────────────────────────
-const INTERNAL_KEY_VAL = process.env.HIVE_INTERNAL_KEY ||
-  'hive_internal_125e04e071e8829be631ea0216dd4a0c9b707975fcecaf8c62c6a2ab43327d46';
+// Leaked-key purge 2026-04-25: no inline fallback. requireInternalKey throws if env missing.
+const { requireInternalKey } = require('./lib/internal-key');
 
-app.get('/v1/bank/sends/recent', async (req, res) => {
-  const key = req.headers['x-hive-internal'];
-  if (!key || key !== INTERNAL_KEY_VAL) {
-    return res.status(401).json({ status: 'error', error: 'INTERNAL_KEY_REQUIRED' });
-  }
+app.get('/v1/bank/sends/recent', requireInternalKey, async (req, res) => {
   try {
     const db = require('./services/db');
     const result = await db.query(

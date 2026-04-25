@@ -32,8 +32,8 @@ const crypto   = require('crypto');
 const db       = require('../services/db');
 const mpc      = require('../services/mpc-treasury');
 
-const INTERNAL_KEY = process.env.HIVE_INTERNAL_KEY ||
-  'hive_internal_125e04e071e8829be631ea0216dd4a0c9b707975fcecaf8c62c6a2ab43327d46';
+// Leaked-key purge 2026-04-25: lazy read, fail closed if env missing.
+const { getInternalKey } = require('../lib/internal-key');
 
 // Price cache — refreshed every 60s
 let prices = { ETH: 3512, SOL: 172, BTC: 67420, DOGE: 0.17, ALEO: 0.046, USDC: 1, MATIC: 0.55, AVAX: 35, LTC: 82, XRP: 0.52 };
@@ -67,7 +67,7 @@ async function refreshPrices() {
 function requireAuth(req, res, next) {
   const key = req.headers['x-hive-internal'] || req.headers['x-hive-key'];
   const did = req.headers['x-hive-did'];
-  if (key === INTERNAL_KEY || did) return next();
+  if ((key && key === getInternalKey()) || did) return next();
   return res.status(401).json({ error: 'x-hive-did or x-hive-internal required' });
 }
 
@@ -297,7 +297,7 @@ router.post('/send', requireAuth, async (req, res) => {
     ...result,
     usd_value: Math.round(usdValue * 100) / 100,
     price_used: prices[assetUpper] || 1,
-    cloazk_cert: 'cloazk:treasury:' + crypto.createHmac('sha256', INTERNAL_KEY)
+    cloazk_cert: 'cloazk:treasury:' + crypto.createHmac('sha256', getInternalKey())
       .update(JSON.stringify({ asset, amount, resolvedAddress, ts: Date.now() })).digest('hex'),
     message: `${amount} ${assetUpper} sent (~$${Math.round(usdValue*100)/100}). ${result.explorer ? 'Track: ' + result.explorer : ''}`,
   });

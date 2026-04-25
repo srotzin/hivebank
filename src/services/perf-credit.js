@@ -2,7 +2,8 @@ const { v4: uuidv4 } = require('uuid');
 const db = require('./db');
 
 const HIVETRUST_URL = process.env.HIVETRUST_URL || 'https://hivetrust.onrender.com';
-const INTERNAL_KEY = process.env.HIVE_INTERNAL_KEY || 'hive_internal_125e04e071e8829be631ea0216dd4a0c9b707975fcecaf8c62c6a2ab43327d46';
+// Leaked-key purge 2026-04-25: lazy read, no inline fallback.
+const { getInternalKey } = require('../lib/internal-key');
 
 const CREDIT_TIERS = [
   { name: 'Elite',       minTrust: 80, credit: 50000, rate: 1.5, termDays: 365 },
@@ -29,7 +30,7 @@ async function fetchTrustScore(did) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 5000);
     const res = await fetch(`${HIVETRUST_URL}/v1/agents/${uuid}`, {
-      headers: { 'x-hive-internal': INTERNAL_KEY }
+      headers: { 'x-hive-internal': getInternalKey() }
     });
     clearTimeout(timeout);
     if (res.ok) {

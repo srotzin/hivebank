@@ -65,8 +65,8 @@ const crypto  = require('crypto');
 const db      = require('../services/db');
 const { sendUSDC } = require('../services/usdc-transfer');
 
-const INTERNAL_KEY = process.env.HIVE_INTERNAL_KEY ||
-  'hive_internal_125e04e071e8829be631ea0216dd4a0c9b707975fcecaf8c62c6a2ab43327d46';
+// Leaked-key purge 2026-04-25: lazy read, fail closed if env missing.
+const { getInternalKey } = require('../lib/internal-key');
 
 // Inbound deposit addresses — this is the magic.
 // When someone on Coinbase/MetaMask/Phantom asks "where do I send?"
@@ -129,7 +129,7 @@ function txId() {
 
 function paymentCert(from, to, amountUsd, asset, rail) {
   const payload = JSON.stringify({ from, to, amountUsd, asset, rail, ts: new Date().toISOString(), nonce: crypto.randomBytes(6).toString('hex') });
-  return 'cloazk:pay:' + crypto.createHmac('sha256', INTERNAL_KEY).update(payload).digest('hex');
+  return 'cloazk:pay:' + crypto.createHmac('sha256', getInternalKey()).update(payload).digest('hex');
 }
 
 // ── DB bootstrap ──────────────────────────────────────────────────────────────
