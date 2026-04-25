@@ -87,6 +87,13 @@ function recordSend(toAddress, amount, addrRecord) {
 
 // ─── Audit log ────────────────────────────────────────────────────────────────
 async function logSend({ toAddress, amountUsdc, reason, txHash, txId, status, referralId = null, hiveDid = null, hiveMemo = null }) {
+  // Circuit breaker: if the DB has been failing recently, skip writes entirely
+  // until a cool-off window passes. The on-chain settlement is the source of
+  // truth; the ledger insert is best-effort accounting. Hammering a dead DB on
+  // every settled call generates unbounded promise pressure under load.
+  if (logSend._dbCircuitOpenUntil && Date.now() < logSend._dbCircuitOpenUntil) {
+    return; // circuit open — skip silently
+  }
   try {
     const now = new Date().toISOString();
     const dna = {
@@ -104,6 +111,7 @@ async function logSend({ toAddress, amountUsdc, reason, txHash, txId, status, re
       [toAddress, amountUsdc, amountUsdc, reason||null, txHash||null, txId||null, status, now,
        referralId, hiveDid||null, toAddress, hiveMemo||dna.hive_memo, JSON.stringify(dna)]
     );
+    logSend._dbFailures = 0;
   } catch (err) {
     try {
       await db.run(
@@ -111,8 +119,22 @@ async function logSend({ toAddress, amountUsdc, reason, txHash, txId, status, re
          VALUES ($1,$2,$3,$4,$5,$6,$7)`,
         [toAddress, amountUsdc, reason||null, txHash||null, txId||null, status, new Date().toISOString()]
       );
+      logSend._dbFailures = 0;
     } catch (e2) {
-      console.error('[usdc-transfer] logSend error (non-fatal):', e2.message);
+      // Throttle this log: same message on every settled tx is what filled the
+      // log pipe last time. Print once per 100 failures + open circuit.
+      logSend._dbFailures = (logSend._dbFailures || 0) + 1;
+      if (logSend._dbFailures === 1 || logSend._dbFailures % 100 === 0) {
+        console.error(`[usdc-transfer] logSend error (non-fatal, count=${logSend._dbFailures}):`, e2.message);
+      }
+      // After 5 consecutive failures, open the circuit for 5 min so we stop
+      // hammering a dead DB on every settled call.
+      if (logSend._dbFailures >= 5) {
+        logSend._dbCircuitOpenUntil = Date.now() + 5 * 60 * 1000;
+        if (logSend._dbFailures === 5) {
+          console.error('[usdc-transfer] DB circuit OPEN for 5min after 5 consecutive failures — settlement continues, ledger writes paused');
+        }
+      }
     }
   }
 }

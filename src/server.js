@@ -1,6 +1,30 @@
 const express = require('express');
 const cors = require('cors');
 const authMiddleware = require('./middleware/auth');
+
+// ─── Process-level safety net ────────────────────────────────────────────────
+// Without these, a single unhandled async rejection (e.g. RPC timeout, dead DB
+// connection on a settlement-side ledger insert) crashes the worker. Render
+// auto-restarts but we lose ~3s of capture window per crash. We log and survive.
+let _lastFatalLogAt = 0;
+process.on('unhandledRejection', (reason, promise) => {
+  // Throttle to 1 line per 5s so a storm of identical rejections does not eat
+  // the log pipe.
+  const now = Date.now();
+  if (now - _lastFatalLogAt > 5000) {
+    _lastFatalLogAt = now;
+    const msg = reason && reason.message ? reason.message : String(reason);
+    console.error(`[fatal-guard] unhandledRejection: ${msg}`);
+  }
+});
+process.on('uncaughtException', (err) => {
+  const now = Date.now();
+  if (now - _lastFatalLogAt > 5000) {
+    _lastFatalLogAt = now;
+    console.error(`[fatal-guard] uncaughtException: ${err && err.message}`);
+  }
+});
+
 const vaultRoutes = require('./routes/vault');
 const budgetRoutes = require('./routes/budget');
 const creditRoutes = require('./routes/credit');

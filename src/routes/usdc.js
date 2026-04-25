@@ -84,7 +84,25 @@ function recordSettlement(amount_usdc, tx_hash) {
 // replay counters and the source IPs / user-agents hitting that nonce, so we can
 // rate-limit runaway clients and identify them.
 const NONCE_CACHE_MAX = 5000;
+const NONCE_SOURCES_MAX = 64;     // per-nonce cap on distinct source IPs we track
+const NONCE_CACHE_TTL_MS = 30 * 60 * 1000; // 30 min — dead nonces drop out
 const nonceCache = new Map(); // nonce(lowercase) → { resp, status, at, replays, sources: Map<ip, {ua, count, first, last}> }
+
+// Periodic janitor: evict entries older than TTL. Bounds memory under sustained
+// replay storms where the same dead nonce stays hot for hours. Runs every 60s.
+setInterval(() => {
+  const cutoff = Date.now() - NONCE_CACHE_TTL_MS;
+  let evicted = 0;
+  for (const [k, v] of nonceCache) {
+    if (v.at < cutoff) {
+      nonceCache.delete(k);
+      evicted += 1;
+    }
+  }
+  if (evicted > 0) {
+    console.log(`[door:eip3009] cache janitor evicted ${evicted} stale nonces, size=${nonceCache.size}`);
+  }
+}, 60 * 1000).unref();
 
 function nonceCacheGet(nonce) {
   if (!nonce) return null;
@@ -187,12 +205,19 @@ router.post('/submit-authorization', requireInternal, async (req, res) => {
     ledger.reasons.nonce_replay += 1;
     cached.replays = (cached.replays || 0) + 1;
 
-    // Track source IP/UA on this nonce
-    const srcRec = cached.sources.get(src_ip) || { ua: user_ag, count: 0, first: Date.now(), last: Date.now() };
+    // Track source IP/UA on this nonce. Cap distinct IPs per nonce so a
+    // pathological client cycling synthetic XFF headers cannot grow the inner
+    // Map without bound. Once at the cap, we coalesce unknown IPs into a
+    // single overflow bucket.
+    let srcKey = src_ip;
+    if (!cached.sources.has(srcKey) && cached.sources.size >= NONCE_SOURCES_MAX) {
+      srcKey = '__overflow__';
+    }
+    const srcRec = cached.sources.get(srcKey) || { ua: user_ag, count: 0, first: Date.now(), last: Date.now() };
     srcRec.count += 1;
     srcRec.last   = Date.now();
     if (!srcRec.ua && user_ag) srcRec.ua = user_ag;
-    cached.sources.set(src_ip, srcRec);
+    cached.sources.set(srcKey, srcRec);
 
     // Throttle: if this IP has hammered this same nonce more than the limit, 429.
     if (srcRec.count > REPLAY_RATE_LIMIT) {
