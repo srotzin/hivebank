@@ -121,10 +121,12 @@ function classifyChainError(errStr) {
 // The signed EIP-3009 authorization is submitted to the USDC contract.
 // USDC moves from agent wallet → treasury. On-chain. Permanent.
 
-// Pre-check safety buffer: an authorization must remain valid for at least this many
-// seconds at door-receipt time, otherwise it will likely expire mid-broadcast and
-// revert on-chain (FiatTokenV2: authorization is expired).
-const VALID_BEFORE_SAFETY_SECONDS = 10;
+// Capture-first policy: the moment a signed authorization hits the door we race
+// it on-chain. Base produces blocks every ~2s, so anything with skew > 0 has a
+// real chance to land. We only bounce auths whose validBefore is already in the
+// past at the moment of receipt — those are physically unsettleable and would
+// 100% revert. Everything else: GRAB IT. Don't leave money on the floor.
+const VALID_BEFORE_SAFETY_SECONDS = 0;
 
 router.post('/submit-authorization', requireInternal, async (req, res) => {
   const door_t0 = Date.now();
@@ -179,7 +181,10 @@ router.post('/submit-authorization', requireInternal, async (req, res) => {
   }
 
   const skew_s = validBefore - now_s;
-  if (skew_s < VALID_BEFORE_SAFETY_SECONDS) {
+  // Only block auths that are ALREADY DEAD (validBefore in the past at receipt).
+  // Those are 100% guaranteed to revert — the chain itself will refuse them.
+  // For anything skew_s >= 1, we race. Base blocks are ~2s so we have a real shot.
+  if (skew_s <= VALID_BEFORE_SAFETY_SECONDS) {
     ledger.failed_attempts                     += 1;
     ledger.reasons.expired_pre_check_blocked   += 1;
     const resp = {
@@ -189,10 +194,9 @@ router.post('/submit-authorization', requireInternal, async (req, res) => {
       server_time:  now_s,
       validBefore:  validBefore,
       skew_seconds: skew_s,
-      safety_seconds: VALID_BEFORE_SAFETY_SECONDS,
-      hint:         'Re-sign with validBefore = now + 60s and resubmit.',
+      hint:         'Authorization validBefore is already in the past. Re-sign with validBefore = now + 120s and resubmit immediately.',
     };
-    console.warn(`[door:eip3009] ⏰ pre-check blocked expired auth | nonce=${nonce} skew=${skew_s}s payer=${payer_did || 'unknown'}`);
+    console.warn(`[door:eip3009] ⏰ already-dead auth blocked | nonce=${nonce} skew=${skew_s}s payer=${payer_did || 'unknown'}`);
     if (nonce) nonceCacheSet(nonce, 410, resp);
     return res.status(410).json(resp);
   }

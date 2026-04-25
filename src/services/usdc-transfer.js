@@ -348,6 +348,16 @@ async function submitEIP3009Authorization(payload) {
 
     console.log(`[eip3009] Broadcasting: ${authorization.from} → ${authorization.to} | $${amountUsdc} USDC`);
 
+    // Race-to-block gas overrides. Base produces blocks every ~2s; a small
+    // priority bump pushes our tx into the very next block instead of letting
+    // it sit in mempool while validBefore ticks down. The cost is trivial
+    // (~$0.0001) vs. the alternative of the auth expiring on us mid-flight.
+    // Base mainnet base-fee is typically <0.01 gwei; 2 gwei priority is plenty.
+    const txOverrides = {
+      maxPriorityFeePerGas: ethers.parseUnits('2',  'gwei'),
+      maxFeePerGas:         ethers.parseUnits('10', 'gwei'),
+    };
+
     // Broadcast the transaction — do NOT wait for confirmation (tx.wait() blocks)
     // Return the tx hash immediately. The blockchain will confirm it — that is certain.
     const tx = await usdc.transferWithAuthorization(
@@ -360,6 +370,7 @@ async function submitEIP3009Authorization(payload) {
       sig.v,
       sig.r,
       sig.s,
+      txOverrides,
     );
 
     console.log(`[eip3009] ✅ Broadcast: ${tx.hash} | $${amountUsdc} USDC | confirming on-chain...`);
