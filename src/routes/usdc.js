@@ -64,6 +64,7 @@ const ledger = {
     chain_revert_other:            0,   // other on-chain revert (sig, nonce-on-chain, balance, etc.)
     rpc_error:                     0,
     skipped_no_signer:             0,
+    replay_rate_limited:           0,   // 429 — same IP hammering same dead nonce
   },
   // Latency histogram (rough buckets, ms door→broadcast)
   latency_ms_sum:               0,
@@ -79,9 +80,11 @@ function recordSettlement(amount_usdc, tx_hash) {
 }
 
 // ─── Idempotency cache (nonce → cached response) ──────────────────────────────
-// Prevents double-broadcast on agent retries. Bounded LRU.
+// Prevents double-broadcast on agent retries. Bounded LRU. Also tracks per-nonce
+// replay counters and the source IPs / user-agents hitting that nonce, so we can
+// rate-limit runaway clients and identify them.
 const NONCE_CACHE_MAX = 5000;
-const nonceCache = new Map(); // nonce(lowercase) → { resp, status, at }
+const nonceCache = new Map(); // nonce(lowercase) → { resp, status, at, replays, sources: Map<ip, {ua, count, first, last}> }
 
 function nonceCacheGet(nonce) {
   if (!nonce) return null;
@@ -95,8 +98,32 @@ function nonceCacheSet(nonce, status, resp) {
     const first = nonceCache.keys().next().value;
     if (first) nonceCache.delete(first);
   }
-  nonceCache.set(k, { resp, status, at: Date.now() });
+  // Preserve replays counter + sources map across re-sets (e.g. status update)
+  const existing = nonceCache.get(k);
+  nonceCache.set(k, {
+    resp,
+    status,
+    at:      Date.now(),
+    replays: existing ? existing.replays : 0,
+    sources: existing ? existing.sources : new Map(),
+  });
 }
+
+// Identify the request source. req.ip already honors trust-proxy; we also peek
+// at common forwarded headers in case proxy trust isn't configured upstream.
+function sourceIpOf(req) {
+  const xff = req.headers['x-forwarded-for'];
+  if (xff) return String(xff).split(',')[0].trim();
+  const real = req.headers['x-real-ip'] || req.headers['cf-connecting-ip'];
+  if (real) return String(real);
+  return req.ip || (req.socket && req.socket.remoteAddress) || 'unknown';
+}
+
+// Per-nonce replay rate limit: after N replays we stop processing and return
+// 429 with Retry-After. This protects CPU + log volume from runaway clients
+// looping dead authorizations.
+const REPLAY_RATE_LIMIT = 3;        // after this many replays from same IP, throttle
+const REPLAY_THROTTLE_RETRY_AFTER = 300; // seconds the client should back off
 
 // Classify a downstream error string into a structured reason bucket
 function classifyChainError(errStr) {
@@ -152,10 +179,46 @@ router.post('/submit-authorization', requireInternal, async (req, res) => {
   // If the agent retries (same nonce), return the cached prior response instead of
   // re-broadcasting. The USDC contract would also reject (nonce already used) but
   // that costs us a broadcast attempt we do not need to make.
+  const src_ip   = sourceIpOf(req);
+  const user_ag  = String(req.headers['user-agent'] || '').slice(0, 200);
+
   const cached = nonceCacheGet(nonce);
   if (cached) {
     ledger.reasons.nonce_replay += 1;
-    console.log(`[door:eip3009] ↩  Replay of nonce ${nonce} from ${payer_did || 'unknown'} → returning cached ${cached.status}`);
+    cached.replays = (cached.replays || 0) + 1;
+
+    // Track source IP/UA on this nonce
+    const srcRec = cached.sources.get(src_ip) || { ua: user_ag, count: 0, first: Date.now(), last: Date.now() };
+    srcRec.count += 1;
+    srcRec.last   = Date.now();
+    if (!srcRec.ua && user_ag) srcRec.ua = user_ag;
+    cached.sources.set(src_ip, srcRec);
+
+    // Throttle: if this IP has hammered this same nonce more than the limit, 429.
+    if (srcRec.count > REPLAY_RATE_LIMIT) {
+      // Log only the first time we cross the threshold per (nonce, ip) and then
+      // every 1000 hits, to keep log volume sane while still being identifiable.
+      if (srcRec.count === REPLAY_RATE_LIMIT + 1 || srcRec.count % 1000 === 0) {
+        console.warn(`[door:eip3009] 🚫 throttling replay loop | nonce=${nonce} ip=${src_ip} ua="${srcRec.ua}" hits=${srcRec.count} cached_status=${cached.status}`);
+      }
+      ledger.reasons.replay_rate_limited = (ledger.reasons.replay_rate_limited || 0) + 1;
+      res.set('Retry-After', String(REPLAY_THROTTLE_RETRY_AFTER));
+      return res.status(429).json({
+        settled: false,
+        reason:  'replay_rate_limited',
+        hint:    'You are looping a dead authorization. Stop and re-sign with a fresh validBefore.',
+        nonce,
+        replays_from_you: srcRec.count,
+        retry_after_seconds: REPLAY_THROTTLE_RETRY_AFTER,
+      });
+    }
+
+    // Below the limit: log identifying info on the FIRST replay from each new IP
+    // so we can see exactly who's looping. After that, suppress to keep logs sane.
+    if (srcRec.count === 1) {
+      console.warn(`[door:eip3009] ↩  REPLAY ORIGIN | nonce=${nonce} ip=${src_ip} ua="${srcRec.ua}" payer_did=${payer_did || 'unknown'} cached_status=${cached.status}`);
+    }
+
     return res.status(cached.status).json({
       ...cached.resp,
       replay: true,
