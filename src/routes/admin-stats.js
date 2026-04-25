@@ -12,7 +12,7 @@ const router  = express.Router();
 
 // Lazy-load to avoid circular import: sentinel hooks attach as side properties
 // on the router exports of usdc routes / usdc-transfer service.
-let _usdcRouterMod, _usdcTransferMod;
+let _usdcRouterMod, _usdcTransferMod, _outboundGuardMod, _spectralZkMod;
 function getUsdcRouterMod() {
   if (!_usdcRouterMod) _usdcRouterMod = require('./usdc');
   return _usdcRouterMod;
@@ -20,6 +20,14 @@ function getUsdcRouterMod() {
 function getUsdcTransferMod() {
   if (!_usdcTransferMod) _usdcTransferMod = require('../services/usdc-transfer');
   return _usdcTransferMod;
+}
+function getOutboundGuardMod() {
+  if (!_outboundGuardMod) _outboundGuardMod = require('../services/outbound-guard');
+  return _outboundGuardMod;
+}
+function getSpectralZkMod() {
+  if (!_spectralZkMod) _spectralZkMod = require('../services/spectral-zk-auth');
+  return _spectralZkMod;
 }
 
 // ─── Capture rate counter ────────────────────────────────────────────────────
@@ -80,9 +88,11 @@ router.get('/stats', (req, res) => {
     const got = req.get('x-hive-internal');
     if (got !== secret) return res.status(401).json({ ok: false, error: 'unauthorized' });
   }
-  let throttle = null, breaker = null;
+  let throttle = null, breaker = null, outboundGuard = null, spectralZk = null;
   try { throttle = getUsdcRouterMod()._throttleStats?.() || null; } catch (e) {}
   try { breaker  = getUsdcTransferMod()._dbBreakerStats?.() || null; } catch (e) {}
+  try { outboundGuard = getOutboundGuardMod().snapshot?.() || null; } catch (e) { outboundGuard = { error: e.message }; }
+  try { spectralZk    = getSpectralZkMod().snapshot?.()   || null; } catch (e) { spectralZk    = { error: e.message }; }
   const capture = _captureStats();
   res.json({
     ok: true,
@@ -92,6 +102,8 @@ router.get('/stats', (req, res) => {
     throttle,
     db_breaker: breaker,
     capture,
+    outbound_guard: outboundGuard,
+    spectral_zk:    spectralZk,
   });
 });
 

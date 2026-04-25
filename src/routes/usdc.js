@@ -641,7 +641,10 @@ router.post('/welcome', requireInternal, async (req, res) => {
 
   if (evm_address) {
     console.log(`[outbound:welcome] $${WELCOME_USDC} USDC → ${evm_address} | did: ${did}`);
-    onchain = await sendUSDC(evm_address, WELCOME_USDC, { reason: 'welcome_bonus', hive_did: did });
+    onchain = await sendUSDC(evm_address, WELCOME_USDC, {
+      reason: 'welcome_bonus', hive_did: did,
+      route: 'usdc/welcome', spectralTicket: req.get('x-spectral-zk-ticket') || null,
+    });
   }
 
   res.json({
@@ -659,7 +662,10 @@ router.post('/send', requireInternal, async (req, res) => {
   if (!to || !amount_usdc) return res.status(400).json({ error: 'to and amount_usdc required' });
 
   console.log(`[outbound:send] $${amount_usdc} USDC → ${to} | reason: ${reason || 'manual'}`);
-  const result = await sendUSDC(to, Number(amount_usdc), { reason: reason || 'manual' });
+  const result = await sendUSDC(to, Number(amount_usdc), {
+    reason: reason || 'manual',
+    route: 'usdc/send', spectralTicket: req.get('x-spectral-zk-ticket') || null,
+  });
 
   res.status(result.ok ? 200 : 500).json({ reason: reason || 'manual', ...result });
 });
@@ -669,7 +675,10 @@ router.post('/test', requireInternal, async (req, res) => {
   if (!to) return res.status(400).json({ error: 'to (EVM address) required' });
 
   console.log(`[outbound:test] $1.00 USDC smoke test → ${to}`);
-  const result = await sendUSDC(to, 1.00, { reason: 'smoke_test' });
+  const result = await sendUSDC(to, 1.00, {
+    reason: 'smoke_test',
+    route: 'usdc/test', spectralTicket: req.get('x-spectral-zk-ticket') || null,
+  });
 
   res.status(result.ok ? 200 : 500).json({
     test:        true,

@@ -41,7 +41,9 @@ router.post('/convert', requireInternal, async (req, res) => {
   const { new_agent_did } = req.body;
   if (!new_agent_did) return res.status(400).json({ error: 'new_agent_did is required' });
 
-  const result = await referral.convertReferral(new_agent_did);
+  const result = await referral.convertReferral(new_agent_did, {
+    spectralTicket: req.get('x-spectral-zk-ticket') || null,
+  });
   res.json(result);
 });
 

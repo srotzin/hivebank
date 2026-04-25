@@ -104,6 +104,8 @@ router.post('/claim', rewardsAuth, async (req, res) => {
       referral_id: ref_id || null,
       hive_did: did,
       hive_memo: dna.hive_memo,
+      route: 'rewards/claim',
+      spectralTicket: req.get('x-spectral-zk-ticket') || null,
     });
 
     const txHash = transferResult.tx_hash || transferResult.tx_id || null;

@@ -443,7 +443,13 @@ router.post('/:did/send', requireAuth, async (req, res) => {
     // On-chain send for USDC rail if to_address provided
     let onChainResult = null;
     if (rail === 'usdc' && to_address) {
-      onChainResult = await sendUSDC(to_address, amount_usdc, { memo: memo || `HiveWallet send from ${did}` }).catch(e => ({ error: e.message }));
+      onChainResult = await sendUSDC(to_address, amount_usdc, {
+        memo: memo || `HiveWallet send from ${did}`,
+        reason: 'hivewallet_send',
+        hive_did: did,
+        route: 'hivewallet/send',
+        spectralTicket: req.get('x-spectral-zk-ticket') || null,
+      }).catch(e => ({ error: e.message }));
     }
 
     // Record transaction
