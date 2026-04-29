@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const authMiddleware = require('./middleware/auth');
+const { x402Middleware } = require('./middleware/x402');
 
 // ─── Process-level safety net ────────────────────────────────────────────────
 // Without these, a single unhandled async rejection (e.g. RPC timeout, dead DB
@@ -69,6 +70,11 @@ const PORT = process.env.PORT || 3001;
 
 app.use(cors());
 app.use(express.json());
+
+// x402 payment gate — treasury attestation + routing surfaces
+// Applied after body parsing so fee table can inspect req.path.
+// Vault deposit/withdraw are exempt (HiveBank earns 5bps yield routing, not per-call).
+app.use(x402Middleware);
 
 // ─── Universal Hive marketing headers + _hive body injection ─────────────────
 const HIVE_META = {
@@ -339,7 +345,8 @@ app.get('/.well-known/ai-plugin.json', (req, res) => {
 const agentCard = {
   protocolVersion: '0.3.0',
   name: 'HiveBank',
-  description: 'Agent banking infrastructure: USDC vaults with DeFi yield pass-through, streaming per-second payments, credit lines, and automated budget management.',
+  description: 'Treasury-as-a-service attestation + routing layer. Hive does NOT custody funds. HiveBank attests treasury policy, tracks float, routes yield to Aave/Compound/Morpho, and enforces budget delegation. Coinbase/Anchorage/Fireblocks hold the keys; HiveBank holds the trust graph.',
+  doctrine: 'HiveBank = treasury attestation + yield routing. Never custody. Never wallet. Merchant retains custody via their existing wallet/MPC. Hive earns 5bps routing fee on routed yield.',
   url: 'https://hivebank.onrender.com',
   version: '1.0.0',
   provider: { organization: 'Hive Agent IQ', url: 'https://www.hiveagentiq.com' },
@@ -371,7 +378,36 @@ const agentCard = {
     { id: 'ritz-cashback', name: 'Ritz Cashback', description: 'Earn 10% cashback on every paid API call as platform credits. Tier system from Bronze to Diamond with soul fitness boosts.', tags: ['cashback', 'rewards', 'credits', 'loyalty'], inputModes: ['application/json'], outputModes: ['application/json'], examples: [] }
   ],
   authentication: { schemes: ['x402', 'api-key'] },
-  payment: { protocol: 'x402', currency: 'USDC', network: 'base', address: '0x15184bf50b3d3f52b60434f8942b7d52f2eb436e' }
+  payment: {
+    protocol: 'x402',
+    currency: 'USDC',
+    network: 'base',
+    address: '0x15184bf50b3d3f52b60434f8942b7d52f2eb436e',
+    secondary_rails: [
+      { currency: 'USDT', network: 'base',   address: '0x15184bf50b3d3f52b60434f8942b7d52f2eb436e' },
+      { currency: 'USDC', network: 'solana', address: 'B1N61cuL35fhskWz5dw8XqDyP6LWi3ZWmq8CNA9L3FVn' },
+    ],
+    fee_schedule: {
+      delegation_policy:      { endpoint: 'POST /v1/bank/delegate',               amount_usdc: 0.10,  model: 'per_rule',    note: 'Budget delegation policy enforcement ($0.10/rule)' },
+      yield_attestation:      { endpoint: 'POST /v1/bank/vault/yield',            amount_usdc: 0.10,  model: 'per_event',   note: 'Yield routing attestation ($0.10; 5bps on routed amount)' },
+      stream_setup:           { endpoint: 'POST /v1/bank/stream/create',          amount_usdc: 0.01,  model: 'flat',        note: 'Payment stream setup ($0.01 flat)' },
+      credit_underwriting:    { endpoint: 'POST /v1/credit/apply',                amount_usdc: 1.00,  model: 'per_apply',   note: 'Credit line underwriting attestation ($1.00/application)' },
+      treasury_policy:        { endpoint: 'POST /v1/bank/treasury-policy/attest', amount_usdc: 50.00, model: 'per_policy',  note: 'Treasury policy attestation ($50/policy attested)' },
+      routing_attestation:    { endpoint: 'POST /v1/grid/route',                  amount_usdc: 0.01,  model: 'per_route',   note: 'Payment rail selection attestation ($0.01)' },
+      settlement_attestation: { endpoint: 'POST /v1/bank/settle',                 amount_usdc: 0.01,  model: 'per_tx',      note: 'Settlement attestation ($0.01/tx)' },
+      dashboard_subscription: { endpoint: 'POST /v1/bank/dashboard/subscribe',    amount_usdc: 99.0,  model: 'monthly',     note: 'Float tracking dashboard subscription ($99/mo per merchant)' },
+      yield_routing_fee:      { note: '5 bps on routed treasury yield — taken at yield accrual; no explicit per-call charge', model: '5bps' },
+      exempt:                 { note: 'Vault deposit/withdraw are fee-exempt; HiveBank earns yield routing fee (5bps) instead of per-call x402' },
+    },
+    partner_attribution: 'Coinbase/Anchorage/Fireblocks hold custody keys. HiveBank is the attestation + routing layer above them.',
+    treasury: '0x15184bf50b3d3f52b60434f8942b7d52f2eb436e',
+  },
+  bogo: {
+    first_call_free: true,
+    loyalty_threshold: 6,
+    pitch: "Pay this once, your 6th paid call is on the house. New here? Add header 'x-hive-did' to claim your first call free.",
+    receipt_chain: 'Every fee event auto-emits a Spectral-signed receipt — verify at POST https://hive-receipt.onrender.com/v1/receipts/verify',
+  },
 };
 
 // /.well-known/agent-card.json — A2A Protocol preferred path
