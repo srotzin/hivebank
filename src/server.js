@@ -292,7 +292,7 @@ app.get('/.well-known/ai-plugin.json', (req, res) => {
       protocol: 'x402',
       currency: 'USDC',
       network: 'base',
-      address: '0x78B3B3C356E89b5a69C488c6032509Ef4260B6bf'
+      address: '0x15184bf50b3d3f52b60434f8942b7d52f2eb436e'
     },
     capabilities: [
       'usdc_vaults',
@@ -371,7 +371,7 @@ const agentCard = {
     { id: 'ritz-cashback', name: 'Ritz Cashback', description: 'Earn 10% cashback on every paid API call as platform credits. Tier system from Bronze to Diamond with soul fitness boosts.', tags: ['cashback', 'rewards', 'credits', 'loyalty'], inputModes: ['application/json'], outputModes: ['application/json'], examples: [] }
   ],
   authentication: { schemes: ['x402', 'api-key'] },
-  payment: { protocol: 'x402', currency: 'USDC', network: 'base', address: '0x78B3B3C356E89b5a69C488c6032509Ef4260B6bf' }
+  payment: { protocol: 'x402', currency: 'USDC', network: 'base', address: '0x15184bf50b3d3f52b60434f8942b7d52f2eb436e' }
 };
 
 // /.well-known/agent-card.json — A2A Protocol preferred path

@@ -238,10 +238,10 @@ router.get('/address', requireAuth, async (req, res) => {
     return res.status(503).json({
       error: result.error,
       fallback: {
-        ETH:  '0x78B3B3C356E89b5a69C488c6032509Ef4260B6bf',
-        USDC: '0x78B3B3C356E89b5a69C488c6032509Ef4260B6bf',
+        ETH:  '0x15184bf50b3d3f52b60434f8942b7d52f2eb436e',
+        USDC: '0x15184bf50b3d3f52b60434f8942b7d52f2eb436e',
         ALEO: 'aleo1cyk7r2jmd7lfcftzyy85z4j5x6rlern598qecx8v2ms738xcvgyq72q6tk',
-      }[asset] || '0x78B3B3C356E89b5a69C488c6032509Ef4260B6bf',
+      }[asset] || '0x15184bf50b3d3f52b60434f8942b7d52f2eb436e',
       note: 'MPC not initialized — using house wallet as fallback.',
     });
   }

@@ -87,7 +87,7 @@ function x402Gate(price, description) {
     if (!payment) {
       return res.status(402).json({
         error: 'payment_required',
-        x402: { version: '1.0', amount_usdc: price, description, payment_methods: ['x402-usdc','x402-aleo'], headers_required: ['X-Payment'], settlement_wallet: '0x78B3B3C356E89b5a69C488c6032509Ef4260B6bf', network: 'base' },
+        x402: { version: '1.0', amount_usdc: price, description, payment_methods: ['x402-usdc','x402-aleo'], headers_required: ['X-Payment'], settlement_wallet: '0x15184bf50b3d3f52b60434f8942b7d52f2eb436e', network: 'base' },
       });
     }
     next();
