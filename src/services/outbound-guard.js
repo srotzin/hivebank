@@ -7,21 +7,30 @@
 //
 // LAYERS (each fail returns ok:false with a specific code):
 //   L0  KILL_SWITCH        — USDC_SENDS_PAUSED env flag (already exists)
-//   L1  ALLOWLIST_HARD     — destination must be in OUTBOUND_ALLOWLIST
-//                            (the 35-wallet roster Hive3-Hive37) OR have
-//                            been pre-approved via signed reason_token
-//   L2  DAILY_TREASURY_CAP — total outbound USD across ALL routes capped
-//                            per UTC day (default $50). Reset at 00:00 UTC.
-//   L3  PER_RECIPIENT_CAP  — sliding 24h cap per address (default $20)
+//   L1  ALLOWLIST_HARD     — destination must be in the route's effective
+//                            allowlist. Default route uses the 35-wallet
+//                            roster (Hive3-Hive37). Other routes plug in
+//                            their own allowlists via registerRoute().
+//   L2  DAILY_TREASURY_CAP — total outbound USD per route, capped per UTC
+//                            day. Each route gets its OWN bucket, so
+//                            prospector cannot eat the dispatcher budget
+//                            and vice versa. Reset at 00:00 UTC.
+//   L3  PER_RECIPIENT_CAP  — sliding 24h cap per address, ALSO per route.
+//                            A prospector winner getting $5 does not
+//                            consume their 'default' refill cap.
 //   L4  SPECTRAL_ANOMALY   — feeds the rolling 60-window of per-tx
-//                            amounts into the HiveChroma spectral
-//                            classifier. If regime crosses into Hδ
-//                            (HIGH_VIOLET) or worse, blocks send and
-//                            requires operator unlock.
-//   L5  TRUST_GATE         — if the request carries a hive_did, looks
-//                            up its trust tier on hivetrust.onrender.com.
-//                            DIDs at tier VOID/anon block by default.
-//                            Configurable via OUTBOUND_TRUST_MIN_TIER.
+//                            amounts (PER ROUTE) into the HiveChroma
+//                            spectral classifier. Prospector rebates
+//                            ($1/$3/$5) cannot poison the dispatcher
+//                            classifier and vice versa. If a route's
+//                            regime crosses into Hδ (HIGH_VIOLET) or
+//                            worse, that route is blocked; others
+//                            unaffected.
+//   L5  TRUST_GATE         — if the request carries a hive_did, looks up
+//                            its trust tier on hivetrust.onrender.com.
+//                            Min tier is per-route (default MOZ; the
+//                            'prospector' route uses VOID because the
+//                            qualifier already proved 3 paid calls).
 //   L6  AUDIT_TRAIL        — every decision (allow/deny/anomaly) is
 //                            written to outbound_audit table AND a
 //                            short-lived in-memory ring used by L4.
@@ -29,18 +38,24 @@
 // All layers are safe-by-default: any unhandled error → block.
 // All decisions log a structured `[outbound-guard]` line so Render Logs
 // + Leak Sentinel can attribute the cause without DB access.
+//
+// 2026-04-29 refactor: per-route state buckets so adding a new outbound
+// route (prospector, future bounty escrow, future referral programs) does
+// not require disabling any layer for "the new traffic shape." Each route
+// gets its own L1/L2/L3/L4/L5 parameters but every send still runs every
+// layer. No regression on the post-incident hardening.
 
 'use strict';
 
 const { classifyPriceWindow, REGIMES } = require('../lib/spectral');
 
-// ─── Config (all overridable via env) ────────────────────────────────────────
+// ─── Default config (overridable per-route via registerRoute) ────────────────
 const KILL_SWITCH         = () => process.env.USDC_SENDS_PAUSED === 'true';
-const DAILY_TREASURY_CAP  = parseFloat(process.env.OUTBOUND_DAILY_CAP_USD     || '50');
-const PER_RECIPIENT_CAP   = parseFloat(process.env.OUTBOUND_PER_RECIPIENT_CAP || '20');
-const SPECTRAL_BLOCK_FROM = (process.env.OUTBOUND_SPECTRAL_BLOCK_FROM || 'HIGH_VIOLET').toUpperCase();
-const ALLOWLIST_REQUIRED  = process.env.OUTBOUND_ALLOWLIST_REQUIRED !== 'false';   // default ON
-const TRUST_MIN_TIER      = (process.env.OUTBOUND_TRUST_MIN_TIER  || 'MOZ').toUpperCase();
+const DEFAULT_DAILY_CAP   = parseFloat(process.env.OUTBOUND_DAILY_CAP_USD     || '50');
+const DEFAULT_RECIP_CAP   = parseFloat(process.env.OUTBOUND_PER_RECIPIENT_CAP || '20');
+const DEFAULT_SPECTRAL_BLOCK_FROM = (process.env.OUTBOUND_SPECTRAL_BLOCK_FROM || 'HIGH_VIOLET').toUpperCase();
+const DEFAULT_ALLOWLIST_REQUIRED  = process.env.OUTBOUND_ALLOWLIST_REQUIRED !== 'false';   // default ON
+const DEFAULT_TRUST_MIN_TIER      = (process.env.OUTBOUND_TRUST_MIN_TIER  || 'MOZ').toUpperCase();
 const TRUST_TIMEOUT_MS    = parseInt(process.env.OUTBOUND_TRUST_TIMEOUT_MS || '1500', 10);
 const TRUST_URL           = process.env.HIVETRUST_URL || 'https://hivetrust.onrender.com';
 
@@ -92,12 +107,83 @@ const ROSTER_ALLOWLIST = new Set([
 // Tier order — index 0 is least-trusted. TRUST_MIN_TIER must be ≥ this index.
 const TIER_ORDER = ['VOID', 'MOZ', 'HAWX', 'EMBR', 'SOLX', 'FENR'];
 
-// ─── State (per-process, cleared on restart) ─────────────────────────────────
-const dayWindow = { utcDay: '', total: 0 };
-const recipient24h = new Map();   // addr → [{ts, amt}, ...]
-const recentSends  = [];          // last 60 amounts for spectral classifier
-const RECENT_MAX   = 60;
+const RECENT_MAX = 60;
 
+// ─── Per-route state registry ───────────────────────────────────────────────
+// Each route gets its own L2 daily window, L3 recipient map, L4 spectral ring.
+// Routes are registered at module-load time. A request with an unregistered
+// route name falls through to the 'default' route's state and parameters.
+
+function makeRouteState(params) {
+  return {
+    name: params.name,
+    // L1 — allowlist (Set<lowercase address>) or null to use roster + dynamic
+    allowlist: params.allowlist || null,
+    allowlistRequired: typeof params.allowlistRequired === 'boolean'
+      ? params.allowlistRequired : DEFAULT_ALLOWLIST_REQUIRED,
+    // L2 — daily cap state
+    dailyCap: typeof params.dailyCap === 'number' ? params.dailyCap : DEFAULT_DAILY_CAP,
+    dayWindow: { utcDay: '', total: 0 },
+    // L3 — per-recipient state
+    perRecipientCap: typeof params.perRecipientCap === 'number'
+      ? params.perRecipientCap : DEFAULT_RECIP_CAP,
+    recipient24h: new Map(),  // addrLc → [{ts, amt}]
+    // L4 — spectral ring
+    recentSends: [],
+    spectralBlockFrom: (params.spectralBlockFrom || DEFAULT_SPECTRAL_BLOCK_FROM).toUpperCase(),
+    // L5 — trust gate
+    trustMinTier: (params.trustMinTier || DEFAULT_TRUST_MIN_TIER).toUpperCase(),
+    // Optional per-route extras for future use
+    extras: params.extras || {},
+  };
+}
+
+const ROUTES = new Map();
+
+// Register the default route first — preserves the original behavior so any
+// code path that doesn't pass route='X' continues to behave exactly as before
+// the refactor.
+ROUTES.set('default', makeRouteState({
+  name: 'default',
+  allowlist: ROSTER_ALLOWLIST,
+  allowlistRequired: DEFAULT_ALLOWLIST_REQUIRED,
+  dailyCap: DEFAULT_DAILY_CAP,
+  perRecipientCap: DEFAULT_RECIP_CAP,
+  spectralBlockFrom: DEFAULT_SPECTRAL_BLOCK_FROM,
+  trustMinTier: DEFAULT_TRUST_MIN_TIER,
+}));
+
+// Registers (or replaces) a named route's params. Idempotent. Routes whose
+// allowlist is dynamic (e.g. prospector winners) should pass `allowlist` as
+// a Set and mutate it via addToAllowlist/removeFromAllowlist.
+function registerRoute(params) {
+  if (!params || !params.name) throw new Error('registerRoute requires params.name');
+  ROUTES.set(params.name, makeRouteState(params));
+  console.log(`[outbound-guard] route registered: ${params.name} ` +
+    `(daily=$${ROUTES.get(params.name).dailyCap}, recip=$${ROUTES.get(params.name).perRecipientCap}, ` +
+    `min_tier=${ROUTES.get(params.name).trustMinTier}, ` +
+    `allowlist_size=${ROUTES.get(params.name).allowlist ? ROUTES.get(params.name).allowlist.size : 0})`);
+  return ROUTES.get(params.name);
+}
+
+function getRoute(name) {
+  return ROUTES.get(name) || ROUTES.get('default');
+}
+
+function addToAllowlist(routeName, address) {
+  const r = ROUTES.get(routeName);
+  if (!r || !r.allowlist) return false;
+  r.allowlist.add(String(address).toLowerCase());
+  return true;
+}
+
+function removeFromAllowlist(routeName, address) {
+  const r = ROUTES.get(routeName);
+  if (!r || !r.allowlist) return false;
+  return r.allowlist.delete(String(address).toLowerCase());
+}
+
+// ─── Helpers ────────────────────────────────────────────────────────────────
 function utcDayKey(d = new Date()) { return d.toISOString().slice(0, 10); }
 
 function pruneOlderThan(arr, cutoffMs) {
@@ -107,49 +193,41 @@ function pruneOlderThan(arr, cutoffMs) {
 
 function tierIndex(tier) { return TIER_ORDER.indexOf(String(tier || '').toUpperCase()); }
 
-// ─── L4 — spectral anomaly classifier ────────────────────────────────────────
-// Treats the rolling sequence of recent send-amounts as a "price" series,
-// reuses HiveChroma's volatility-regime classifier from src/oracle/spectral.js.
-// In normal operation the ring is mostly dispatcher-batch refills (varied amounts).
-// An attacker hammering identical $10 sends spikes the vol_ratio AND the rate,
-// flagged as HIGH_VIOLET or above.
-function spectralCheck(amount) {
-  recentSends.push(amount);
-  if (recentSends.length > RECENT_MAX) recentSends.shift();
-  // Need a meaningful window before classifying
-  if (recentSends.length < 10) {
-    return { allow: true, regime: 'WARMUP', n: recentSends.length };
+// ─── L4 — spectral anomaly classifier (per-route ring) ──────────────────────
+function spectralCheck(route, amount) {
+  route.recentSends.push(amount);
+  if (route.recentSends.length > RECENT_MAX) route.recentSends.shift();
+  if (route.recentSends.length < 10) {
+    return { allow: true, regime: 'WARMUP', n: route.recentSends.length };
   }
-  const cls = classifyPriceWindow(recentSends);
-  // Build an ordered list of regime names from REGIMES so we can compare
+  const cls = classifyPriceWindow(route.recentSends);
   const order = REGIMES.map(r => r.name);
-  const blockIdx = order.indexOf(SPECTRAL_BLOCK_FROM);
+  const blockIdx = order.indexOf(route.spectralBlockFrom);
   const curIdx   = order.indexOf(cls.regime);
   if (blockIdx >= 0 && curIdx >= 0 && curIdx >= blockIdx) {
-    return { allow: false, regime: cls.regime, vol_ratio: cls.stats.vol_ratio, n: recentSends.length };
+    return { allow: false, regime: cls.regime, vol_ratio: cls.stats.vol_ratio, n: route.recentSends.length };
   }
-  return { allow: true, regime: cls.regime, vol_ratio: cls.stats.vol_ratio, n: recentSends.length };
+  return { allow: true, regime: cls.regime, vol_ratio: cls.stats.vol_ratio, n: route.recentSends.length };
 }
 
 // ─── L5 — HiveTrust DID gate ────────────────────────────────────────────────
-async function trustCheck(did) {
-  if (!did) {
-    // No DID provided → fall back to allowlist requirement (handled in L1)
+async function trustCheck(hiveDid, minTier) {
+  if (!hiveDid) {
     return { allow: true, tier: 'unknown', reason: 'no_did' };
   }
   try {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), TRUST_TIMEOUT_MS);
-    const r = await fetch(`${TRUST_URL}/v1/trust/lookup/${encodeURIComponent(did)}`, {
-      headers: { 'x-hive-tier': 'enterprise' },   // bypass HiveTrust's own rate limit
+    const r = await fetch(`${TRUST_URL}/v1/trust/tier?did=${encodeURIComponent(hiveDid)}`, {
       signal: ctrl.signal,
+      headers: { 'x-hive-tier': 'enterprise' },
     });
     clearTimeout(t);
     if (!r.ok) return { allow: false, tier: 'unreachable', reason: `trust_http_${r.status}` };
     const j = await r.json();
-    const tier = j?.data?.tier || j?.tier || 'VOID';
-    if (tierIndex(tier) < tierIndex(TRUST_MIN_TIER)) {
-      return { allow: false, tier, reason: `tier_below_min_${TRUST_MIN_TIER}` };
+    const tier = (j.tier || 'VOID').toUpperCase();
+    if (tierIndex(tier) < tierIndex(minTier)) {
+      return { allow: false, tier, reason: `tier_below_min_${minTier}` };
     }
     return { allow: true, tier, reason: 'ok' };
   } catch (e) {
@@ -162,13 +240,16 @@ async function trustCheck(did) {
 // Caller (usdc-transfer.js) must short-circuit on allow:false BEFORE any
 // chain interaction.
 async function checkOutbound({ toAddress, amountUsdc, hiveDid, reason, route }) {
+  const routeName = route || 'default';
+  const r = getRoute(routeName);
+
   const decision = {
     ts: new Date().toISOString(),
     to: toAddress,
     amount: amountUsdc,
     did: hiveDid || null,
     reason: reason || null,
-    route: route || null,
+    route: routeName,
   };
 
   // L0 kill switch (defence in depth — usdc-transfer.js has its own)
@@ -176,60 +257,57 @@ async function checkOutbound({ toAddress, amountUsdc, hiveDid, reason, route }) 
     return finalize(decision, false, 'L0_KILL_SWITCH', 'USDC_SENDS_PAUSED=true');
   }
 
-  // L1 hard allowlist
-  if (ALLOWLIST_REQUIRED) {
+  // L1 hard allowlist (per-route)
+  if (r.allowlistRequired) {
     const lc = String(toAddress || '').toLowerCase();
-    if (!ROSTER_ALLOWLIST.has(lc)) {
+    if (!r.allowlist || !r.allowlist.has(lc)) {
       return finalize(decision, false, 'L1_ALLOWLIST',
-        `Recipient ${toAddress} is not in the 35-wallet roster. Contact operator to add or use OUTBOUND_ALLOWLIST_REQUIRED=false.`);
+        `Recipient ${toAddress} is not in the '${routeName}' route allowlist (size=${r.allowlist ? r.allowlist.size : 0}). Add via the route's qualifier or use OUTBOUND_ALLOWLIST_REQUIRED=false.`);
     }
   }
 
-  // L2 daily treasury cap
+  // L2 daily treasury cap (per-route)
   const today = utcDayKey();
-  if (dayWindow.utcDay !== today) { dayWindow.utcDay = today; dayWindow.total = 0; }
-  if (dayWindow.total + amountUsdc > DAILY_TREASURY_CAP) {
+  if (r.dayWindow.utcDay !== today) { r.dayWindow.utcDay = today; r.dayWindow.total = 0; }
+  if (r.dayWindow.total + amountUsdc > r.dailyCap) {
     return finalize(decision, false, 'L2_DAILY_CAP',
-      `Daily cap $${DAILY_TREASURY_CAP} would be exceeded ($${dayWindow.total.toFixed(2)} already + $${amountUsdc.toFixed(2)} = $${(dayWindow.total+amountUsdc).toFixed(2)}).`);
+      `Route '${routeName}' daily cap $${r.dailyCap} would be exceeded ($${r.dayWindow.total.toFixed(2)} already + $${amountUsdc.toFixed(2)} = $${(r.dayWindow.total+amountUsdc).toFixed(2)}).`);
   }
 
-  // L3 per-recipient 24h cap
+  // L3 per-recipient 24h cap (per-route)
   const lc = String(toAddress || '').toLowerCase();
-  const arr = recipient24h.get(lc) || [];
+  const arr = r.recipient24h.get(lc) || [];
   pruneOlderThan(arr, 24 * 60 * 60 * 1000);
   const recipTotal = arr.reduce((s, x) => s + x.amt, 0);
-  if (recipTotal + amountUsdc > PER_RECIPIENT_CAP) {
+  if (recipTotal + amountUsdc > r.perRecipientCap) {
     return finalize(decision, false, 'L3_RECIPIENT_CAP',
-      `Recipient cap $${PER_RECIPIENT_CAP}/24h exceeded ($${recipTotal.toFixed(2)} + $${amountUsdc.toFixed(2)}).`);
+      `Route '${routeName}' recipient cap $${r.perRecipientCap}/24h exceeded for ${lc} ($${recipTotal.toFixed(2)} + $${amountUsdc.toFixed(2)}).`);
   }
 
-  // L4 spectral anomaly (does NOT yet append — appends only on allow)
-  const spec = spectralCheck(amountUsdc);
+  // L4 spectral anomaly (per-route ring)
+  const spec = spectralCheck(r, amountUsdc);
   if (!spec.allow) {
-    // Roll back the spectral push — the send is being blocked, don't poison ring
-    recentSends.pop();
+    r.recentSends.pop();   // don't poison ring with a blocked attempt
     return finalize(decision, false, 'L4_SPECTRAL',
-      `Send pattern entered ${spec.regime} regime (vol_ratio=${(spec.vol_ratio || 0).toFixed(4)}, n=${spec.n}). Likely automated drain. Operator unlock required.`,
+      `Route '${routeName}' send pattern entered ${spec.regime} regime (vol_ratio=${(spec.vol_ratio || 0).toFixed(4)}, n=${spec.n}). Likely automated drain. Operator unlock required.`,
       { regime: spec.regime, vol_ratio: spec.vol_ratio });
   }
 
-  // L5 trust gate (DID-based)
-  const trust = await trustCheck(hiveDid);
+  // L5 trust gate (per-route min tier)
+  const trust = await trustCheck(hiveDid, r.trustMinTier);
   if (!trust.allow) {
-    // 2026-04-25 M2 fix: spectralCheck already pushed; if L5 denies, pop it so
-    // a low-trust caller cannot poison the rolling regime by repeated attempts.
-    recentSends.pop();
+    r.recentSends.pop();
     return finalize(decision, false, 'L5_TRUST',
-      `DID ${hiveDid || '<missing>'} did not meet min tier ${TRUST_MIN_TIER} (got ${trust.tier}, ${trust.reason}).`,
+      `Route '${routeName}' DID ${hiveDid || '<missing>'} did not meet min tier ${r.trustMinTier} (got ${trust.tier}, ${trust.reason}).`,
       { tier: trust.tier });
   }
 
   // ALL CLEAR — commit state
-  dayWindow.total += amountUsdc;
+  r.dayWindow.total += amountUsdc;
   arr.push({ ts: Date.now(), amt: amountUsdc });
-  recipient24h.set(lc, arr);
-  return finalize(decision, true, 'OK', 'cleared all 6 layers',
-    { regime: spec.regime, tier: trust.tier, daily_used: dayWindow.total, daily_cap: DAILY_TREASURY_CAP });
+  r.recipient24h.set(lc, arr);
+  return finalize(decision, true, 'OK', `cleared all 6 layers on route '${routeName}'`,
+    { regime: spec.regime, tier: trust.tier, daily_used: r.dayWindow.total, daily_cap: r.dailyCap });
 }
 
 function finalize(decision, allow, code, detail, telemetry = {}) {
@@ -239,20 +317,40 @@ function finalize(decision, allow, code, detail, telemetry = {}) {
   return out;
 }
 
-// Read-only copy of the current spectral ring. Consumed by spectral-zk-auth
-// so its `liveRegime(ring)` agrees with the L4 classifier here.
-function getRecentRing() { return recentSends.slice(); }
+// Read-only copy of the current spectral ring for a given route. Consumed by
+// spectral-zk-auth so its `liveRegime(ring)` agrees with the L4 classifier here.
+// Defaults to the 'default' route's ring for backward compat with existing
+// callers that don't pass a route name.
+function getRecentRing(routeName = 'default') {
+  const r = getRoute(routeName);
+  return r.recentSends.slice();
+}
 
 // Read-only telemetry for /v1/admin/stats integration
 function snapshot() {
+  const routes = {};
+  for (const [name, r] of ROUTES.entries()) {
+    routes[name] = {
+      daily: { utc_day: r.dayWindow.utcDay, used: r.dayWindow.total, cap: r.dailyCap },
+      spectral: { recent_n: r.recentSends.length, block_from: r.spectralBlockFrom },
+      allowlist: { enforced: r.allowlistRequired, size: r.allowlist ? r.allowlist.size : 0 },
+      trust: { min_tier: r.trustMinTier },
+      recipient_24h_addrs: r.recipient24h.size,
+    };
+  }
   return {
     kill_switch: KILL_SWITCH(),
-    daily: { utc_day: dayWindow.utcDay, used: dayWindow.total, cap: DAILY_TREASURY_CAP },
-    spectral: { recent_n: recentSends.length, block_from: SPECTRAL_BLOCK_FROM },
-    allowlist: { enforced: ALLOWLIST_REQUIRED, size: ROSTER_ALLOWLIST.size },
-    trust: { min_tier: TRUST_MIN_TIER, url: TRUST_URL, timeout_ms: TRUST_TIMEOUT_MS },
-    recipient_24h_addrs: recipient24h.size,
+    trust: { url: TRUST_URL, timeout_ms: TRUST_TIMEOUT_MS },
+    routes,
   };
 }
 
-module.exports = { checkOutbound, snapshot, getRecentRing, ROSTER_ALLOWLIST };
+module.exports = {
+  checkOutbound,
+  snapshot,
+  getRecentRing,
+  registerRoute,
+  addToAllowlist,
+  removeFromAllowlist,
+  ROSTER_ALLOWLIST,
+};

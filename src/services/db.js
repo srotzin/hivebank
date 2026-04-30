@@ -431,6 +431,39 @@ const DDL = `
   );
 
   CREATE INDEX IF NOT EXISTS idx_rewards_did ON rewards(did);
+
+  CREATE TABLE IF NOT EXISTS prospector_claims (
+    claim_id TEXT PRIMARY KEY,
+    did TEXT UNIQUE NOT NULL,
+    address TEXT UNIQUE NOT NULL,
+    slot INTEGER NOT NULL,
+    tier TEXT NOT NULL,                  -- gold | silver | bronze
+    rebate_usdc NUMERIC NOT NULL,
+    status TEXT DEFAULT 'pending',       -- pending | paid | deferred | blocked | rejected
+    created_at TEXT NOT NULL,
+    paid_at TEXT,
+    tx_hash TEXT,
+    qualification_jti TEXT,
+    attribution JSONB,
+    block_code TEXT,
+    block_detail TEXT
+  );
+
+  CREATE TABLE IF NOT EXISTS prospector_admits (
+    jti TEXT PRIMARY KEY,
+    did TEXT NOT NULL,
+    address TEXT NOT NULL,
+    qualifier_did TEXT NOT NULL,
+    paid_calls INTEGER,
+    issued_at TEXT,
+    admitted_at TEXT NOT NULL
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_psp_claims_status ON prospector_claims(status);
+  CREATE INDEX IF NOT EXISTS idx_psp_claims_address ON prospector_claims(address);
+  CREATE INDEX IF NOT EXISTS idx_psp_claims_did ON prospector_claims(did);
+  CREATE INDEX IF NOT EXISTS idx_psp_admits_did ON prospector_admits(did);
+  CREATE INDEX IF NOT EXISTS idx_psp_admits_address ON prospector_admits(address);
 `;
 
 // Migrations: add columns to existing tables (safe — IF NOT EXISTS style via DO block)
@@ -449,6 +482,11 @@ const MIGRATIONS = `
     BEGIN ALTER TABLE rewards ADD COLUMN ref_id TEXT; EXCEPTION WHEN duplicate_column THEN NULL; END;
     -- Remove UNIQUE constraint on (did, trigger) for first_referral multi-claim support
     -- (rewards table allows multiple rows for first_referral — dedup is in application layer)
+    -- Prospector's Bonanza columns (additive — safe on existing instances)
+    BEGIN ALTER TABLE prospector_claims ADD COLUMN qualification_jti TEXT; EXCEPTION WHEN duplicate_column THEN NULL; END;
+    BEGIN ALTER TABLE prospector_claims ADD COLUMN attribution JSONB; EXCEPTION WHEN duplicate_column THEN NULL; END;
+    BEGIN ALTER TABLE prospector_claims ADD COLUMN block_code TEXT; EXCEPTION WHEN duplicate_column THEN NULL; END;
+    BEGIN ALTER TABLE prospector_claims ADD COLUMN block_detail TEXT; EXCEPTION WHEN duplicate_column THEN NULL; END;
   END $$;
 `;
 
