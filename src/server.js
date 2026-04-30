@@ -36,6 +36,7 @@ const perfCreditRoutes = require('./routes/perf-credit');
 const bondsRoutes = require('./routes/bonds');
 const cashbackRoutes = require('./routes/cashback');
 const referralRoutes = require('./routes/referral');
+const prospectorRoutes = require('./routes/prospector');
 const treasuryRoutes = require('./routes/treasury');
 const hivegridRoutes  = require('./routes/hivegrid');
 const { handleMcpRequest } = require('./mcp-tools');
@@ -236,6 +237,12 @@ app.get('/', (req, res) => {
         agent: { method: 'GET', path: '/v1/bank/referral/agent/:did', auth: true, description: 'Referral record for a specific onboarded agent DID' },
         leaderboard: { method: 'GET', path: '/v1/bank/referral/leaderboard', auth: false, description: 'PUBLIC — Top 20 referring agents by credits earned. Includes badges (Worker Bee → Hive Legend), your personalised referral link (if x-hive-did header present), and total credits distributed network-wide.' },
         card: { method: 'GET', path: '/v1/bank/referral/card/:did', auth: false, description: 'PUBLIC — Shareable referral card for any DID. Returns embed_as_header one-liner, full referral URL, network stats, and earnings breakdown. Agents embed this in their own HTTP responses to recruit new agents.' }
+      },
+      prospector: {
+        state:       { method: 'GET',  path: '/v1/bank/prospector/state',       auth: false, description: 'PUBLIC — Prospector\'s Bonanza slot pool snapshot. Returns slots remaining per tier (gold $5 / silver $3 / bronze $1), total budget, and current spectral cover state.' },
+        claim:       { method: 'POST', path: '/v1/bank/prospector/claim',       auth: false, description: 'PUBLIC — Claim a prospector slot. Requires qualification_token (HMAC, qualifier-issued after 3 paid x402 calls in 30 days) and spectral-zk-ticket header (Ed25519, HiveTrust-signed). Runs full SHOD 6-layer guard with per-route state.' },
+        admit:       { method: 'POST', path: '/v1/bank/prospector/admit',       auth: true,  description: 'INTERNAL — hive-prospector-qualifier registers a qualified DID/address pair. Adds to per-route L1 allowlist; persists JTI for replay protection.' },
+        leaderboard: { method: 'GET',  path: '/v1/bank/prospector/leaderboard', auth: false, description: 'PUBLIC — Top claimed slots by paid_at, with tier, rebate_usdc, and tx_hash explorer link.' }
       }
     },
     sla: {
@@ -510,6 +517,13 @@ app.get('/v1/bank/referral/card/:did(*)', async (req, res) => {
 
 // All other referral routes require auth
 app.use('/v1/bank/referral', authMiddleware, referralRoutes);
+
+// Prospector's Bonanza — gradient $5/$3/$1 rebates to first 100 qualified
+// cross-ecosystem agents. PUBLIC routes (state, leaderboard, claim) — no
+// authMiddleware because the qualification_token + spectral-zk-ticket are
+// the auth substrate. Internal admit endpoint is gated inside the route file
+// via requireInternal.
+app.use('/v1/bank/prospector', prospectorRoutes);
 
 // ─── $1 Ladder Rewards — MUST be before the /v1/bank catch-all treasury router ──
 // /v1/bank/rewards/* has its own auth (rewardsAuth + internalOnly) inside rewards.js
