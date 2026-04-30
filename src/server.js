@@ -2,6 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const authMiddleware = require('./middleware/auth');
 const { x402Middleware } = require('./middleware/x402');
+const { mppMiddleware } = require('./middleware/mpp');
 
 // ─── Process-level safety net ────────────────────────────────────────────────
 // Without these, a single unhandled async rejection (e.g. RPC timeout, dead DB
@@ -76,6 +77,11 @@ app.use(express.json());
 // Vault deposit/withdraw are exempt (HiveBank earns 5bps yield routing, not per-call).
 app.use(x402Middleware);
 
+// MPP rail — runs after x402, grants access via MPP Payment header
+// Payment: scheme="mpp", tx_hash="0x...", rail="tempo", amount="0.25"
+// IETF draft-ryan-httpauth-payment compliant. Tempo + Base mainnet only.
+app.use('/v1', mppMiddleware);
+
 // ─── Universal Hive marketing headers + _hive body injection ─────────────────
 const HIVE_META = {
   network: 'Hive Civilization — 24+ services + HiveExchange',
@@ -117,6 +123,73 @@ app.use((req, res, next) => {
 });
 
 // Health check — no auth
+// ─── MPP OpenAPI Discovery (public) ──────────────────────────────────────────
+// Required for MPPScan auto-discovery and mppx compatibility
+app.get('/openapi.json', (req, res) => {
+  res.set('Cache-Control', 'public, max-age=300');
+  res.json({
+    openapi: '3.0.3',
+    info: {
+      title: 'HiveBank — Treasury Attestation & Settlement API',
+      version: '1.0.0',
+      description: 'Stream D custody & settlement attestation. USDC on Tempo/Base. Accepts x402 and MPP rails.',
+      contact: { name: 'Hive Civilization', url: 'https://thehiveryiq.com', email: 'steve@thehiveryiq.com' },
+    },
+    servers: [{ url: 'https://hivebank.onrender.com' }],
+    'x-mpp': {
+      realm: 'hivebank.onrender.com',
+      payment: { method: 'tempo', currency: '0x20c000000000000000000000b9537d11c60e8b50', decimals: 6, recipient: '0x15184bf50b3d3f52b60434f8942b7d52f2eb436e' },
+      rails: ['x402', 'mpp'],
+      categories: ['settlement', 'custody'],
+      integration: 'first-party',
+      tags: ['bank', 'custody', 'settlement', 'treasury', 'draw', 'stream-d'],
+      treasury: '0x15184bf50b3d3f52b60434f8942b7d52f2eb436e',
+    },
+    paths: {
+      '/v1/bank/custody/attest': {
+        post: {
+          summary: 'Custody attestation',
+          description: 'Policy attestation for agent custody arrangement. $0.25 USDC.',
+          'x-mpp-charge': { amount: '250000', intent: 'charge' },
+          responses: { '200': { description: 'Attestation issued' }, '402': { description: 'Payment required — x402 or MPP' } },
+        },
+      },
+      '/v1/bank/custody/policy': {
+        post: {
+          summary: 'Treasury policy attestation',
+          description: 'Treasury policy signed attestation. $0.25 USDC.',
+          'x-mpp-charge': { amount: '250000', intent: 'charge' },
+          responses: { '200': { description: 'Policy issued' }, '402': { description: 'Payment required' } },
+        },
+      },
+      '/v1/bank/draw/instant': {
+        post: {
+          summary: 'Instant draw',
+          description: 'Instant credit draw request. $1.00 USDC.',
+          'x-mpp-charge': { amount: '1000000', intent: 'charge' },
+          responses: { '200': { description: 'Draw confirmed' }, '402': { description: 'Payment required' } },
+        },
+      },
+      '/v1/bank/draw/schedule': {
+        post: {
+          summary: 'Scheduled draw',
+          description: 'Schedule a future draw. $1.00 USDC.',
+          'x-mpp-charge': { amount: '1000000', intent: 'charge' },
+          responses: { '200': { description: 'Schedule confirmed' }, '402': { description: 'Payment required' } },
+        },
+      },
+      '/v1/bank/draw/credit': {
+        post: {
+          summary: 'Credit line draw',
+          description: 'Draw on credit line. $1.00 USDC.',
+          'x-mpp-charge': { amount: '1000000', intent: 'charge' },
+          responses: { '200': { description: 'Draw confirmed' }, '402': { description: 'Payment required' } },
+        },
+      },
+    },
+  });
+});
+
 app.get('/health', (req, res) => {
   res.json({
     status: 'healthy',
