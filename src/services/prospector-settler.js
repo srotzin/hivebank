@@ -91,6 +91,8 @@ async function runOnce({ source = 'cron' } = {}) {
          FROM prospector_claims c
          JOIN prospector_admissions a ON a.jti = c.jti
         WHERE c.payout_status = 'pending'
+          AND c.did NOT LIKE 'did:hive:fixture-%'
+          AND c.address_lc NOT LIKE '0x000%'
         ORDER BY c.claimed_at ASC
         LIMIT $1`,
       [SETTLER_BATCH_SIZE]
