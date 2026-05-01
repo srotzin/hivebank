@@ -88,6 +88,7 @@ function isFree(path, method) {
   if (path.startsWith('/v1/cashback')) return true;
   if (path.startsWith('/v1/bonds')) return true;
   if (path.startsWith('/v1/bank/referral')) return true;
+  if (path.startsWith('/v1/bank/prospector')) return true;  // Prospector's Bonanza — auth handled per-endpoint
   if (path.startsWith('/v1/pay') || path.startsWith('/v1/bank/settle/stealth')) return true;
   if (path.startsWith('/.well-known') || path.startsWith('/mcp')) return true;
   return false;
