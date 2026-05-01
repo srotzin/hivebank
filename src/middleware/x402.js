@@ -177,11 +177,34 @@ function x402Middleware(req, res, next) {
     'X-Payment-Model': fee.model,
   });
 
+  // Standard x402 `accepts[]` array — facilitator-compatible (Coinbase x402 facilitator,
+  // exact scheme, EIP-3009 assetTransferMethod). Same shape hivecompute emits.
+  const amountAtomic = Math.round(fee.amount * 1_000_000).toString();
+  const resourceUrl = `https://${req.get('host') || 'hivebank.onrender.com'}${req.originalUrl || req.url}`;
+  const accepts = [{
+    scheme: 'exact',
+    network: 'base',
+    maxAmountRequired: amountAtomic,
+    resource: resourceUrl,
+    description: fee.label,
+    payTo: payTo,
+    maxTimeoutSeconds: 300,
+    asset: USDC_CONTRACT,
+    mimeType: 'application/json',
+    extra: {
+      name: 'USD Coin',
+      version: '2',
+      assetTransferMethod: 'eip3009',
+    },
+  }];
+
   return res.status(402).json({
     success: false,
     error: 'Payment required',
     code: 'PAYMENT_REQUIRED',
     protocol: 'x402',
+    x402Version: 1,
+    accepts: accepts,
     service: 'HiveBank — Treasury Policy Attestation + Routing Layer',
     payment: {
       amount_usdc: fee.amount,
