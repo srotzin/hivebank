@@ -240,9 +240,15 @@ async function checkOutbound({ toAddress, amountUsdc, hiveDid, reason, route }) 
       { regime: spec.regime, vol_ratio: spec.vol_ratio });
   }
 
-  // L5 trust gate (DID-based)
+  // L5 trust gate (DID-based) — carve-out for prospector settler:
+  // Brand-new prospector-qualified callers are definitionally VOID tier (nobody
+  // has attested them yet). The qualifier service has already done the work
+  // L5 is meant to do (proved 3 paid x402 calls on-chain). Skipping L5 ONLY
+  // for route='prospector_settler' is in-process trust — not externally callable.
+  // All other routes still hit L5.
   const trust = await trustCheck(hiveDid);
-  if (!trust.allow) {
+  const isProspectorSettler = (route === 'prospector_settler');
+  if (!trust.allow && !isProspectorSettler) {
     // 2026-04-25 M2 fix: spectralCheck already pushed; if L5 denies, pop it so
     // a low-trust caller cannot poison the rolling regime by repeated attempts.
     recentSends.pop();
