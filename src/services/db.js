@@ -431,6 +431,31 @@ const DDL = `
   );
 
   CREATE INDEX IF NOT EXISTS idx_rewards_did ON rewards(did);
+
+  -- Prospector's Bonanza admission and claim tables
+  CREATE TABLE IF NOT EXISTS prospector_admissions (
+    jti TEXT PRIMARY KEY,
+    did TEXT NOT NULL,
+    address_lc TEXT NOT NULL,
+    paid_calls INT NOT NULL,
+    iat BIGINT NOT NULL,
+    exp BIGINT NOT NULL,
+    admitted_at TIMESTAMP DEFAULT NOW()
+  );
+  CREATE INDEX IF NOT EXISTS idx_prospector_admissions_did ON prospector_admissions(did);
+  CREATE UNIQUE INDEX IF NOT EXISTS uq_prospector_admissions_did_addr ON prospector_admissions(did, address_lc);
+
+  CREATE TABLE IF NOT EXISTS prospector_claims (
+    id BIGSERIAL PRIMARY KEY,
+    jti TEXT NOT NULL REFERENCES prospector_admissions(jti),
+    did TEXT NOT NULL,
+    address_lc TEXT NOT NULL,
+    payout_amount_usdc NUMERIC(18,6) NOT NULL,
+    payout_status TEXT NOT NULL,
+    payout_tx_hash TEXT,
+    claimed_at TIMESTAMP DEFAULT NOW(),
+    UNIQUE(did, address_lc)
+  );
 `;
 
 // Migrations: add columns to existing tables (safe — IF NOT EXISTS style via DO block)
