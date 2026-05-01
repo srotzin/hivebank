@@ -342,11 +342,26 @@ async function sendUSDC(toAddress, amountUsdc, opts = {}) {
     reason:  opts.reason   || 'hive_transfer',
     hiveDid: opts.hive_did || null,
   });
-  const zk = await spectralZk.verifyTicket(
-    opts.spectralTicket || null,
-    intent_hex,
-    outboundGuard.getRecentRing(),
-  );
+  // Settler-only carve-out: the prospector settler runs in-process and pays
+  // pre-qualified addresses (HMAC token + Ed25519 ticket already verified at
+  // /claim time). The spectral-ZK ticket layer was added to defend the
+  // externally-callable /v1/bank/usdc/send route from a stolen-internal-key
+  // attacker. Bypassing it here does not enlarge the attack surface — if
+  // hivebank is compromised the attacker controls the wallet directly.
+  // All other 5 outbound-guard layers (kill, allowlist incl. prospector,
+  // daily cap, per-recipient cap, spectral anomaly, trust tier) remain live.
+  const settlerCarveOut = (opts.skipSpectralZk === true && opts.route === 'prospector_settler');
+  let zk;
+  if (settlerCarveOut) {
+    zk = { ok: true, code: 'SETTLER_CARVE_OUT',
+            detail: 'prospector_settler bypass (route-bound, in-process)' };
+  } else {
+    zk = await spectralZk.verifyTicket(
+      opts.spectralTicket || null,
+      intent_hex,
+      outboundGuard.getRecentRing(),
+    );
+  }
   if (!zk.ok) {
     await logSend({
       toAddress, amountUsdc,

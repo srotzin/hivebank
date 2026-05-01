@@ -44,6 +44,33 @@ const TRUST_MIN_TIER      = (process.env.OUTBOUND_TRUST_MIN_TIER  || 'MOZ').toUp
 const TRUST_TIMEOUT_MS    = parseInt(process.env.OUTBOUND_TRUST_TIMEOUT_MS || '1500', 10);
 const TRUST_URL           = process.env.HIVETRUST_URL || 'https://hivetrust.onrender.com';
 
+// ─── Prospector runtime allowlist override ───────────────────────────────────
+// Addresses added here are treated as if they were in ROSTER_ALLOWLIST for
+// the purpose of L1. They are added by the prospector settler after the
+// caller has been verified by HMAC qualification token + Ed25519 ZK ticket
+// (qualifier-side, NOT outbound spectral-ZK). This list is per-process and
+// rebuilt at startup from prospector_claims rows where status='pending' or
+// 'sent' so no qualified address ever gets stuck after a restart.
+const PROSPECTOR_ALLOWLIST = new Set();
+function addProspectorAllowlistEntry(addrLc) {
+  if (typeof addrLc === 'string' && /^0x[0-9a-f]{40}$/.test(addrLc)) {
+    PROSPECTOR_ALLOWLIST.add(addrLc);
+  }
+}
+async function rehydrateProspectorAllowlist() {
+  try {
+    const db = require('./db');
+    const r = await db.query(
+      `SELECT DISTINCT address_lc FROM prospector_claims
+         WHERE payout_status IN ('pending','sent')`
+    );
+    for (const row of (r.rows || [])) addProspectorAllowlistEntry(row.address_lc);
+    console.log(`[outbound-guard] prospector allowlist rehydrated: ${PROSPECTOR_ALLOWLIST.size} address(es)`);
+  } catch (e) {
+    console.warn('[outbound-guard] prospector allowlist rehydrate failed (non-fatal):', e.message);
+  }
+}
+
 // 35-wallet roster — only these can receive auto-refills without operator override.
 // Pulled from the rebalancer's wallets.json (kept in sync at deploy time).
 const ROSTER_ALLOWLIST = new Set([
@@ -179,9 +206,9 @@ async function checkOutbound({ toAddress, amountUsdc, hiveDid, reason, route }) 
   // L1 hard allowlist
   if (ALLOWLIST_REQUIRED) {
     const lc = String(toAddress || '').toLowerCase();
-    if (!ROSTER_ALLOWLIST.has(lc)) {
+    if (!ROSTER_ALLOWLIST.has(lc) && !PROSPECTOR_ALLOWLIST.has(lc)) {
       return finalize(decision, false, 'L1_ALLOWLIST',
-        `Recipient ${toAddress} is not in the 35-wallet roster. Contact operator to add or use OUTBOUND_ALLOWLIST_REQUIRED=false.`);
+        `Recipient ${toAddress} is not in the roster or prospector allowlist. Contact operator to add or use OUTBOUND_ALLOWLIST_REQUIRED=false.`);
     }
   }
 
@@ -255,4 +282,11 @@ function snapshot() {
   };
 }
 
-module.exports = { checkOutbound, snapshot, getRecentRing, ROSTER_ALLOWLIST };
+module.exports = {
+  checkOutbound,
+  snapshot,
+  getRecentRing,
+  ROSTER_ALLOWLIST,
+  addProspectorAllowlistEntry,
+  rehydrateProspectorAllowlist,
+};

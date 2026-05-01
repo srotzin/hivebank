@@ -25,6 +25,7 @@ const { sha512 } = require('@noble/hashes/sha2');
 const db       = require('../services/db');
 const { sendUSDC } = require('../services/usdc-transfer');
 const { requireInternalKey } = require('../lib/internal-key');
+const settler  = require('../services/prospector-settler');
 
 // noble/ed25519 v2 requires a synchronous sha512 provider
 ed.etc.sha512Sync = (...m) => sha512(ed.etc.concatBytes(...m));
@@ -494,6 +495,8 @@ router.get('/state', async (req, res) => {
 
 // ─── GET /_stats ──────────────────────────────────────────────────────────────
 // Internal-only. Returns aggregate counts and recent rows for the prospector funnel.
+// Used by the ops dashboard at thehiveryiq.com/ops to surface the live funnel:
+// mints (admissions) → claims → paid → pending → blocked.
 // Gated on x-hive-internal — pure SELECT, no writes.
 
 router.get('/_stats', requireInternalKey, async (req, res) => {
@@ -527,6 +530,10 @@ router.get('/_stats', requireInternalKey, async (req, res) => {
       "SELECT COUNT(*) AS pending FROM prospector_claims WHERE payout_status = 'pending'",
       []
     );
+    const clmBlockedRow = await db.getOne(
+      "SELECT COUNT(*) AS blocked FROM prospector_claims WHERE payout_status = 'blocked'",
+      []
+    );
 
     // USDC sums
     const usdcPaidRow = await db.getOne(
@@ -556,8 +563,10 @@ router.get('/_stats', requireInternalKey, async (req, res) => {
       claims_total:                parseInt(clmTotRow?.total     ?? 0, 10),
       claims_paid:                 parseInt(clmPaidRow?.paid     ?? 0, 10),
       claims_pending:              parseInt(clmPendingRow?.pending ?? 0, 10),
+      claims_blocked:              parseInt(clmBlockedRow?.blocked ?? 0, 10),
       usdc_paid_total:             parseFloat(usdcPaidRow?.total   ?? 0),
       usdc_pending_total:          parseFloat(usdcPendingRow?.total ?? 0),
+      settler:                     settler.snapshot(),
       recent_admissions: (recentAdmissions || []).map(r => ({
         jti:         r.jti,
         did:         r.did,
@@ -579,6 +588,20 @@ router.get('/_stats', requireInternalKey, async (req, res) => {
     });
   } catch (err) {
     console.error('[prospector/_stats] DB error:', err.message);
+    return res.status(500).json({ error: 'internal', detail: err.message });
+  }
+});
+
+// ─── POST /_settler/run ────────────────────────────────────────────────────────
+// Internal-only manual sweep trigger (for verification + ops). Runs one
+// sweep immediately and returns the result. Does NOT replace the cron loop.
+
+router.post('/_settler/run', requireInternalKey, async (req, res) => {
+  try {
+    const result = await settler.runOnce({ source: 'manual' });
+    return res.status(200).json(result);
+  } catch (err) {
+    console.error('[prospector/_settler/run] error:', err.message);
     return res.status(500).json({ error: 'internal', detail: err.message });
   }
 });

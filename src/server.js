@@ -75,6 +75,8 @@ const echoRoutes      = require('./routes/echo');
 const messengerRoutes = require('./routes/messenger');
 const aiTransferBriefRoutes = require('./routes/ai-transfer-brief');
 const prospectorRoutes = require('./routes/prospector');
+const prospectorSettler = require('./services/prospector-settler');
+const outboundGuardForBoot = require('./services/outbound-guard');
 
 // ─── Recruitment envelope — boot guard + response wrapper ────────────────────
 // Every 4xx/5xx response across the fleet must carry the canonical 3 artifacts:
@@ -870,6 +872,16 @@ async function start() {
       .then(() => {
         const cashback = require('./services/cashback');
         return cashback.seedCashbackAccounts();
+      })
+      .then(async () => {
+        // Rehydrate the prospector allowlist BEFORE the settler kicks off,
+        // so any previously-qualified address survives a hivebank restart.
+        if (typeof outboundGuardForBoot.rehydrateProspectorAllowlist === 'function') {
+          await outboundGuardForBoot.rehydrateProspectorAllowlist();
+        }
+        // Start the 60s prospector settler. Pre-qualified addresses get paid
+        // automatically; nothing manual required.
+        prospectorSettler.start();
       })
       .catch(err => console.error('[HiveBank] DB init error (non-fatal):', err.message));
 
