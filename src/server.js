@@ -74,6 +74,7 @@ const { seedGraph } = require('./services/seed');
 const echoRoutes      = require('./routes/echo');
 const messengerRoutes = require('./routes/messenger');
 const aiTransferBriefRoutes = require('./routes/ai-transfer-brief');
+const prospectorRoutes = require('./routes/prospector');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -617,6 +618,11 @@ app.use('/v1/bank/promos', promosRoutes);
 // HiveWallet MPC Treasury — Better than Ledger.
 // ETH, SOL, BTC, DOGE, USDC, ALEO + 100 more. Coinbase MPC. Active treasury.
 app.use('/v1/treasury', treasuryMpcRoutes);
+
+// ─── Prospector's Bonanza admission and claim rail ────────────────────────────
+// No global authMiddleware — /admit uses x-hive-internal, /claim and /state use did:hive:
+// Must be mounted BEFORE the /v1/bank catch-all treasury router.
+app.use('/v1/bank/prospector', prospectorRoutes);
 
 // ─── Treasury primitives (yield / delegation / payment-stream / credit) ────────
 // Mount treasury router at /v1/bank — handles /vault/yield, /delegate, /delegate/check,
