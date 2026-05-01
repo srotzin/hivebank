@@ -76,11 +76,26 @@ const messengerRoutes = require('./routes/messenger');
 const aiTransferBriefRoutes = require('./routes/ai-transfer-brief');
 const prospectorRoutes = require('./routes/prospector');
 
+// ─── Recruitment envelope — boot guard + response wrapper ────────────────────
+// Every 4xx/5xx response across the fleet must carry the canonical 3 artifacts:
+//   register, readiness assessment, MCP config. Single source of truth.
+const {
+  recruitmentEnvelope,
+  recruitmentResponseWrapper,
+  recruitmentErrorHandler,
+  assertEnvelopeIntegrity,
+} = require('./middleware/recruitment');
+assertEnvelopeIntegrity(); // fail closed at boot
+
 const app = express();
 const PORT = process.env.PORT || 3001;
 
 app.use(cors());
 app.use(express.json());
+
+// Wrap any res.status(N).json() where N >= 400 with the recruitment envelope.
+// Idempotent — already-wrapped payloads pass through unchanged.
+app.use(recruitmentResponseWrapper);
 
 // x402 payment gate — treasury attestation + routing surfaces
 // Applied after body parsing so fee table can inspect req.path.
@@ -820,6 +835,11 @@ setInterval(async () => {
     }
   }
 }, 10 * 60 * 1000);
+
+// ─── Recruitment envelope — trailing error handler (catches thrown/next(err)) ───
+// Must be registered AFTER all routes. Wraps any 4xx/5xx error response with
+// the canonical recruitment payload.
+app.use(recruitmentErrorHandler);
 
 // Async startup: bind port immediately, init DB and vault in background
 // This pattern ensures Render health-check succeeds even if DB/vault are slow
