@@ -24,6 +24,7 @@ const ed       = require('@noble/ed25519');
 const { sha512 } = require('@noble/hashes/sha2');
 const db       = require('../services/db');
 const { sendUSDC } = require('../services/usdc-transfer');
+const { requireInternalKey } = require('../lib/internal-key');
 
 // noble/ed25519 v2 requires a synchronous sha512 provider
 ed.etc.sha512Sync = (...m) => sha512(ed.etc.concatBytes(...m));
@@ -487,6 +488,97 @@ router.get('/state', async (req, res) => {
     });
   } catch (err) {
     console.error('[prospector/state] DB error:', err.message);
+    return res.status(500).json({ error: 'internal', detail: err.message });
+  }
+});
+
+// ─── GET /_stats ──────────────────────────────────────────────────────────────
+// Internal-only. Returns aggregate counts and recent rows for the prospector funnel.
+// Gated on x-hive-internal — pure SELECT, no writes.
+
+router.get('/_stats', requireInternalKey, async (req, res) => {
+  try {
+    const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+
+    // Aggregate counts — admissions
+    const admTotRow = await db.getOne(
+      'SELECT COUNT(*) AS total FROM prospector_admissions',
+      []
+    );
+    const admUniqRow = await db.getOne(
+      'SELECT COUNT(DISTINCT address_lc) AS unique_addresses FROM prospector_admissions',
+      []
+    );
+    const adm24hRow = await db.getOne(
+      "SELECT COUNT(*) AS last_24h FROM prospector_admissions WHERE admitted_at >= $1",
+      [since24h]
+    );
+
+    // Aggregate counts — claims
+    const clmTotRow = await db.getOne(
+      'SELECT COUNT(*) AS total FROM prospector_claims',
+      []
+    );
+    const clmPaidRow = await db.getOne(
+      "SELECT COUNT(*) AS paid FROM prospector_claims WHERE payout_status = 'sent'",
+      []
+    );
+    const clmPendingRow = await db.getOne(
+      "SELECT COUNT(*) AS pending FROM prospector_claims WHERE payout_status = 'pending'",
+      []
+    );
+
+    // USDC sums
+    const usdcPaidRow = await db.getOne(
+      "SELECT COALESCE(SUM(payout_amount_usdc), 0) AS total FROM prospector_claims WHERE payout_status = 'sent'",
+      []
+    );
+    const usdcPendingRow = await db.getOne(
+      "SELECT COALESCE(SUM(payout_amount_usdc), 0) AS total FROM prospector_claims WHERE payout_status = 'pending'",
+      []
+    );
+
+    // Recent rows
+    const recentAdmissions = await db.getAll(
+      'SELECT jti, did, address_lc, paid_calls, admitted_at, exp FROM prospector_admissions ORDER BY admitted_at DESC LIMIT 10',
+      []
+    );
+    const recentClaims = await db.getAll(
+      'SELECT id, jti, did, address_lc, payout_amount_usdc, payout_status, payout_tx_hash, claimed_at FROM prospector_claims ORDER BY claimed_at DESC LIMIT 10',
+      []
+    );
+
+    return res.status(200).json({
+      generated_at: new Date().toISOString(),
+      admissions_total:            parseInt(admTotRow?.total     ?? 0, 10),
+      admissions_unique_addresses: parseInt(admUniqRow?.unique_addresses ?? 0, 10),
+      admissions_last_24h:         parseInt(adm24hRow?.last_24h  ?? 0, 10),
+      claims_total:                parseInt(clmTotRow?.total     ?? 0, 10),
+      claims_paid:                 parseInt(clmPaidRow?.paid     ?? 0, 10),
+      claims_pending:              parseInt(clmPendingRow?.pending ?? 0, 10),
+      usdc_paid_total:             parseFloat(usdcPaidRow?.total   ?? 0),
+      usdc_pending_total:          parseFloat(usdcPendingRow?.total ?? 0),
+      recent_admissions: (recentAdmissions || []).map(r => ({
+        jti:         r.jti,
+        did:         r.did,
+        address_lc:  r.address_lc,
+        paid_calls:  r.paid_calls,
+        admitted_at: r.admitted_at,
+        exp:         r.exp,
+      })),
+      recent_claims: (recentClaims || []).map(r => ({
+        id:                  r.id,
+        jti:                 r.jti,
+        did:                 r.did,
+        address_lc:          r.address_lc,
+        payout_amount_usdc:  parseFloat(r.payout_amount_usdc),
+        payout_status:       r.payout_status,
+        payout_tx_hash:      r.payout_tx_hash || null,
+        claimed_at:          r.claimed_at,
+      })),
+    });
+  } catch (err) {
+    console.error('[prospector/_stats] DB error:', err.message);
     return res.status(500).json({ error: 'internal', detail: err.message });
   }
 });
