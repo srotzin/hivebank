@@ -836,6 +836,17 @@ setInterval(async () => {
   }
 }, 10 * 60 * 1000);
 
+// ─── Recruitment envelope — 404 catch-all (no Express HTML leak) ───
+// Any unmatched path must return JSON with the canonical recruitment payload,
+// not Express's default "Cannot GET /..." HTML page. Per INTEGRATION.md §6.
+app.use((req, res) => {
+  res.status(404).json(recruitmentEnvelope(404, {
+    error: 'not_found',
+    path: req.path,
+    method: req.method,
+  }));
+});
+
 // ─── Recruitment envelope — trailing error handler (catches thrown/next(err)) ───
 // Must be registered AFTER all routes. Wraps any 4xx/5xx error response with
 // the canonical recruitment payload.
