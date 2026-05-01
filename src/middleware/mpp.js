@@ -6,31 +6,36 @@
  * MPP receipts emit Spectral receipts with payment_method: "mpp".
  *
  * Stream D — settlement, custody attestation
- * Treasury: Monroe Base 0x15184bf50b3d3f52b60434f8942b7d52f2eb436e
- * Tempo RPC: https://rpc.tempo.xyz
+ * Treasury: resolved via src/lib/treasury.getTreasuryAddress() — no fallback,
+ *           no lowercase, no env-or-hardcode antipattern.
+ *
+ * Settlement rails: USDC on Base mainnet only (chain_id 8453, contract
+ * 0x833589fcD6eDb6E08f4c7C32D4f71b54bdA02913). Tempo is private testnet
+ * with no public allowlist; previous Tempo claim removed 2026-04-30.
  *
  * References:
  *   https://github.com/wevm/mppx
  *   https://datatracker.ietf.org/doc/draft-ryan-httpauth-payment/
- *   https://github.com/tempoxyz/mpp
  */
 
 'use strict';
 
+const { getTreasuryAddress } = require('../lib/treasury');
+const { canonicalAddress }   = require('../lib/canonical');
+
 // ─── Configuration ───────────────────────────────────────────
 
-const PAYMENT_ADDRESS = (
-  process.env.HIVEBANK_PAYMENT_ADDRESS ||
-  process.env.HIVE_PAYMENT_ADDRESS ||
-  '0x15184bf50b3d3f52b60434f8942b7d52f2eb436e'
-).toLowerCase();
+// Lazy resolver — fail-closed via getTreasuryAddress() and canonicalAddress().
+// Never lowercased, never `||` fallback to a hex literal.
+function getMppPaymentAddress() {
+  return canonicalAddress(getTreasuryAddress());
+}
 
-const TEMPO_RPC_URL = process.env.TEMPO_RPC_URL || 'https://rpc.tempo.xyz';
 const BASE_RPC_URL  = process.env.BASE_RPC_URL  || 'https://mainnet.base.org';
-const USDC_CONTRACT = '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913';
-const TEMPO_USDCE   = '0x20c000000000000000000000b9537d11c60e8b50';
+const USDC_CONTRACT = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
 const TRANSFER_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
 const RECEIPT_ENDPOINT = 'https://hive-receipt.onrender.com/v1/receipt/sign';
+const BASE_CHAIN_ID = 8453;
 
 // In-memory MPP payment cache (TTL 10 min)
 const mppPaymentCache = new Map();
@@ -43,7 +48,7 @@ setInterval(() => {
 
 // ─── Spectral Receipt (non-blocking) ─────────────────────────
 
-async function emitMppSpectralReceipt({ path, amount, txHash, rail }) {
+async function emitMppSpectralReceipt({ path, amount, txHash }) {
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 4_000);
@@ -56,12 +61,13 @@ async function emitMppSpectralReceipt({ path, amount, txHash, rail }) {
         event_type:     'api_payment',
         amount_usd:     amount,
         currency:       'USDC',
-        network:        rail === 'tempo' ? 'tempo' : 'base',
-        pay_to:         PAYMENT_ADDRESS,
+        network:        'base',
+        chain_id:       BASE_CHAIN_ID,
+        pay_to:         getMppPaymentAddress(),
         endpoint:       path,
         tx_hash:        txHash,
         payment_method: 'mpp',
-        rail:           rail,
+        rail:           'base-usdc',
         timestamp:      new Date().toISOString(),
       }),
     });
@@ -71,14 +77,14 @@ async function emitMppSpectralReceipt({ path, amount, txHash, rail }) {
   }
 }
 
-// ─── On-chain USDC verification (Base or Tempo) ──────────────
+// ─── On-chain USDC verification (Base mainnet only) ──────────
 
-async function verifyMppOnChain(txHash, expectedAmount, rail) {
-  const rpcUrl = rail === 'tempo' ? TEMPO_RPC_URL : BASE_RPC_URL;
-  const usdcContract = rail === 'tempo' ? TEMPO_USDCE : USDC_CONTRACT;
+async function verifyMppOnChain(txHash, expectedAmount) {
+  const treasury = getMppPaymentAddress().toLowerCase();
+  const usdc = USDC_CONTRACT.toLowerCase();
 
   try {
-    const rpcRes = await fetch(rpcUrl, {
+    const rpcRes = await fetch(BASE_RPC_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -89,15 +95,15 @@ async function verifyMppOnChain(txHash, expectedAmount, rail) {
     });
     const { result: receipt } = await rpcRes.json();
     if (!receipt || receipt.status !== '0x1') {
-      return { ok: false, reason: 'tx not confirmed or reverted' };
+      return { ok: false, reason: 'tx not confirmed or reverted on Base mainnet' };
     }
     for (const log of receipt.logs) {
       if (
-        log.address?.toLowerCase() === usdcContract &&
+        log.address?.toLowerCase() === usdc &&
         log.topics?.[0] === TRANSFER_TOPIC
       ) {
         const toAddr = '0x' + log.topics[2].slice(26).toLowerCase();
-        if (toAddr === PAYMENT_ADDRESS) {
+        if (toAddr === treasury) {
           const transferAmount = parseInt(log.data, 16) / 1e6;
           if (transferAmount >= expectedAmount - 0.001) {
             return { ok: true, transferAmount };
@@ -106,7 +112,7 @@ async function verifyMppOnChain(txHash, expectedAmount, rail) {
         }
       }
     }
-    return { ok: false, reason: 'no matching USDC Transfer to treasury found' };
+    return { ok: false, reason: 'no matching USDC Transfer to treasury found on Base' };
   } catch (e) {
     return { ok: false, reason: e.message };
   }
@@ -123,10 +129,11 @@ function parseMppHeader(req) {
       if (m) params[m[1]] = m[2];
     }
     if (params.scheme === 'mpp' || params.tx_hash) {
+      // Rail is fixed to base-usdc — Tempo claim removed.
       return {
         found:   true,
         txHash:  params.tx_hash || params.credential || '',
-        rail:    params.rail || 'tempo',
+        rail:    'base-usdc',
         amount:  parseFloat(params.amount || '0') || null,
       };
     }
@@ -137,7 +144,7 @@ function parseMppHeader(req) {
     return {
       found:   true,
       txHash:  credHdr,
-      rail:    req.headers['x-mpp-rail'] || 'tempo',
+      rail:    'base-usdc',
       amount:  parseFloat(req.headers['x-mpp-amount'] || '0') || null,
     };
   }
@@ -181,7 +188,7 @@ async function mppMiddleware(req, res, next) {
   const mpp = parseMppHeader(req);
   if (!mpp.found) return next();
 
-  const { txHash, rail, amount: headerAmount } = mpp;
+  const { txHash, amount: headerAmount } = mpp;
   const expectedAmount = getMppPrice(req.path);
   const amountToVerify = headerAmount || expectedAmount;
 
@@ -200,7 +207,7 @@ async function mppMiddleware(req, res, next) {
     });
   }
 
-  const verification = await verifyMppOnChain(txHash, amountToVerify, rail || 'tempo');
+  const verification = await verifyMppOnChain(txHash, amountToVerify);
   mppPaymentCache.set(txHash, { ...verification, timestamp: Date.now() });
 
   if (!verification.ok) {
@@ -208,7 +215,7 @@ async function mppMiddleware(req, res, next) {
       error:  'MPP payment verification failed',
       code:   'MPP_PAYMENT_INVALID',
       reason: verification.reason,
-      hint:   'Provide a confirmed Tempo or Base USDC transaction in the Payment header.',
+      hint:   'Provide a confirmed Base mainnet USDC transaction in the Payment header.',
     });
   }
 
@@ -216,13 +223,12 @@ async function mppMiddleware(req, res, next) {
     path:   req.path,
     amount: amountToVerify,
     txHash,
-    rail:   rail || 'tempo',
   }).catch(() => {});
 
-  res.set('Payment-Receipt',        `mpp:${txHash}:${rail || 'tempo'}`);
+  res.set('Payment-Receipt',        `mpp:${txHash}:base-usdc`);
   res.set('X-Hive-Payment-Rail',   'mpp');
   res.set('X-Hive-Payment-Method', 'mpp');
   return next();
 }
 
-module.exports = { mppMiddleware, mppPaymentCache };
+module.exports = { mppMiddleware, mppPaymentCache, getMppPaymentAddress };

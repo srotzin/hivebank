@@ -3,6 +3,15 @@ const cors = require('cors');
 const authMiddleware = require('./middleware/auth');
 const { x402Middleware } = require('./middleware/x402');
 const { mppMiddleware } = require('./middleware/mpp');
+const { getTreasuryAddress } = require('./lib/treasury');
+const { canonicalAddress } = require('./lib/canonical');
+
+// Lazy resolver for every public surface that needs to advertise the
+// canonical EIP-55 treasury address. Never read process.env directly.
+// Never lowercase. Never `||` fallback to a hex literal.
+function publicTreasury() {
+  return canonicalAddress(getTreasuryAddress());
+}
 
 // ─── Process-level safety net ────────────────────────────────────────────────
 // Without these, a single unhandled async rejection (e.g. RPC timeout, dead DB
@@ -78,8 +87,9 @@ app.use(express.json());
 app.use(x402Middleware);
 
 // MPP rail — runs after x402, grants access via MPP Payment header
-// Payment: scheme="mpp", tx_hash="0x...", rail="tempo", amount="0.25"
-// IETF draft-ryan-httpauth-payment compliant. Tempo + Base mainnet only.
+// Payment: scheme="mpp", tx_hash="0x...", rail="base-usdc", amount="0.25"
+// IETF draft-ryan-httpauth-payment compliant. USDC on Base mainnet only.
+// (Tempo claim removed 2026-04-30 — no public Tempo allowlist exists.)
 app.use('/v1', mppMiddleware);
 
 // ─── Universal Hive marketing headers + _hive body injection ─────────────────
@@ -132,18 +142,18 @@ app.get('/openapi.json', (req, res) => {
     info: {
       title: 'HiveBank — Treasury Attestation & Settlement API',
       version: '1.0.0',
-      description: 'Stream D custody & settlement attestation. USDC on Tempo/Base. Accepts x402 and MPP rails.',
+      description: 'Stream D custody & settlement attestation. USDC on Base mainnet (chain_id 8453). Accepts x402 and MPP rails.',
       contact: { name: 'Hive Civilization', url: 'https://thehiveryiq.com', email: 'steve@thehiveryiq.com' },
     },
     servers: [{ url: 'https://hivebank.onrender.com' }],
     'x-mpp': {
       realm: 'hivebank.onrender.com',
-      payment: { method: 'tempo', currency: '0x20c000000000000000000000b9537d11c60e8b50', decimals: 6, recipient: '0x15184bf50b3d3f52b60434f8942b7d52f2eb436e' },
+      payment: { method: 'usdc-base', currency: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', decimals: 6, network: 'base', chain_id: 8453, recipient: publicTreasury() },
       rails: ['x402', 'mpp'],
       categories: ['settlement', 'custody'],
       integration: 'first-party',
       tags: ['bank', 'custody', 'settlement', 'treasury', 'draw', 'stream-d'],
-      treasury: '0x15184bf50b3d3f52b60434f8942b7d52f2eb436e',
+      treasury: publicTreasury(),
     },
     paths: {
       '/v1/bank/custody/attest': {
@@ -371,7 +381,8 @@ app.get('/.well-known/ai-plugin.json', (req, res) => {
       protocol: 'x402',
       currency: 'USDC',
       network: 'base',
-      address: '0x15184bf50b3d3f52b60434f8942b7d52f2eb436e'
+      chain_id: 8453,
+      address: publicTreasury()
     },
     capabilities: [
       'usdc_vaults',
@@ -414,8 +425,10 @@ app.get('/.well-known/ai-plugin.json', (req, res) => {
   });
 });
 
-// A2A Agent Card v0.3.0 — served at both paths for compatibility
-const agentCard = {
+// A2A Agent Card v0.3.0 — lazy-built so treasury resolves fresh each request
+// (and fails closed if env is wrong, instead of caching a stale or empty value).
+function buildAgentCard() {
+  return {
   protocolVersion: '0.3.0',
   name: 'HiveBank',
   description: 'Treasury-as-a-service attestation + routing layer. Hive does NOT custody funds. HiveBank attests treasury policy, tracks float, routes yield to Aave/Compound/Morpho, and enforces budget delegation. Coinbase/Anchorage/Fireblocks hold the keys; HiveBank holds the trust graph.',
@@ -455,9 +468,9 @@ const agentCard = {
     protocol: 'x402',
     currency: 'USDC',
     network: 'base',
-    address: '0x15184bf50b3d3f52b60434f8942b7d52f2eb436e',
+    address: publicTreasury(),
     secondary_rails: [
-      { currency: 'USDT', network: 'base',   address: '0x15184bf50b3d3f52b60434f8942b7d52f2eb436e' },
+      { currency: 'USDT', network: 'base',   address: publicTreasury() },
       { currency: 'USDC', network: 'solana', address: 'B1N61cuL35fhskWz5dw8XqDyP6LWi3ZWmq8CNA9L3FVn' },
     ],
     fee_schedule: {
@@ -473,7 +486,7 @@ const agentCard = {
       exempt:                 { note: 'Vault deposit/withdraw are fee-exempt; HiveBank earns yield routing fee (5bps) instead of per-call x402' },
     },
     partner_attribution: 'Coinbase/Anchorage/Fireblocks hold custody keys. HiveBank is the attestation + routing layer above them.',
-    treasury: '0x15184bf50b3d3f52b60434f8942b7d52f2eb436e',
+    treasury: publicTreasury(),
   },
   bogo: {
     first_call_free: true,
@@ -481,16 +494,17 @@ const agentCard = {
     pitch: "Pay this once, your 6th paid call is on the house. New here? Add header 'x-hive-did' to claim your first call free.",
     receipt_chain: 'Every fee event auto-emits a Spectral-signed receipt — verify at POST https://hive-receipt.onrender.com/v1/receipts/verify',
   },
-};
+  };
+}
 
 // /.well-known/agent-card.json — A2A Protocol preferred path
 app.get('/.well-known/agent-card.json', (req, res) => {
-  res.json(agentCard);
+  res.json(buildAgentCard());
 });
 
 // /.well-known/agent.json — legacy A2A Agent Card
 app.get('/.well-known/agent.json', (req, res) => {
-  res.json(agentCard);
+  res.json(buildAgentCard());
 });
 
 // MCP JSON-RPC endpoint — no auth (protocol handles its own negotiation)

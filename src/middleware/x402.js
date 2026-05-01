@@ -14,14 +14,29 @@
  * HiveBank attests to policy, tracks float, routes yields via Aave/Compound/Morpho.
  * Merchant retains custody via their wallet/MPC.
  *
- * Treasury: Monroe Base 0x15184bf50b3d3f52b60434f8942b7d52f2eb436e
+ * Treasury: resolved at runtime via src/lib/treasury.getTreasuryAddress()
+ *           (fail-closed) and emitted EIP-55 via src/lib/canonical.canonicalAddress().
+ *           NEVER read process.env directly. NEVER lowercase. NEVER `||` fallback to a hex literal.
+ *
+ * Settlement: USDC on Base mainnet only (chain_id 8453, contract
+ * 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913).
+ *
  * Brand gold: #C08D23
  */
 
-const HIVE_PAYMENT_ADDRESS = (process.env.HIVE_PAYMENT_ADDRESS || '0x15184bf50b3d3f52b60434f8942b7d52f2eb436e').toLowerCase();
+'use strict';
+
+const { getTreasuryAddress } = require('../lib/treasury');
+const { canonicalAddress }   = require('../lib/canonical');
+
+// Lazy resolver — fail-closed via getTreasuryAddress(), EIP-55 via canonicalAddress().
+function getPaymentAddress() {
+  return canonicalAddress(getTreasuryAddress());
+}
+
 const SERVICE_KEY = process.env.HIVE_INTERNAL_KEY || '';
 const BASE_RPC_URL = process.env.BASE_RPC_URL || 'https://mainnet.base.org';
-const USDC_CONTRACT = '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913';
+const USDC_CONTRACT = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
 const TRANSFER_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
 const BASE_CHAIN_ID = 8453;
 
@@ -35,10 +50,6 @@ const FREE_PREFIXES_GET = [
 ];
 
 // ─── Fee table ─────────────────────────────────────────────────
-// Only POST/mutation endpoints are gated.
-// Revenue model: attestation fees + routing fees.
-// NOT charging on vault/deposit or vault/withdraw directly —
-// those are agent-custody operations; HiveBank earns via yield routing (5bps).
 const FEE_TABLE = {
   '/v1/bank/delegate':              { amount: 0.10,   model: 'delegation_policy',      label: 'Budget delegation policy ($0.10/rule)' },
   '/v1/bank/delegate/check':        { amount: 0.01,   model: 'delegation_check',        label: 'Budget delegation check ($0.01)' },
@@ -61,32 +72,23 @@ function getFee(path) {
   for (const [prefix, fee] of Object.entries(FEE_TABLE)) {
     if (path.startsWith(prefix)) return fee;
   }
-  // Default: POST mutations cost $0.01
   return { amount: 0.01, model: 'bank_per_call', label: 'HiveBank API call ($0.01)' };
 }
 
 function isFree(path, method) {
-  // All GETs on free prefixes
   if (method === 'GET') {
     for (const prefix of FREE_PREFIXES_GET) {
       if (path.startsWith(prefix)) return true;
     }
     return true; // All GETs are free (read-only)
   }
-  // Vault deposit/withdraw: these are agent-custody ops, not charged (HiveBank earns yield 5bps on the routed amount)
-  // They still require a valid DID (auth handles that), not x402
   if (path === '/v1/bank/vault/deposit' || path === '/v1/bank/vault/withdraw') return true;
-  if (path === '/v1/bank/vault/create') return true; // vault creation is free
-  if (path === '/v1/bank/vault/rebalance') return true; // internal only
-  // Cashback earn/spend are free (cashback is HiveBank's loyalty loop, not a fee surface)
+  if (path === '/v1/bank/vault/create') return true;
+  if (path === '/v1/bank/vault/rebalance') return true;
   if (path.startsWith('/v1/cashback')) return true;
-  // Bonds staking is a separate revenue surface (hive-trust-bond handles this)
   if (path.startsWith('/v1/bonds')) return true;
-  // Referral record/convert is internal
   if (path.startsWith('/v1/bank/referral')) return true;
-  // Pay and A2A routes are settlement-oriented — HiveBank earns on settlement side, not per-call
   if (path.startsWith('/v1/pay') || path.startsWith('/v1/bank/settle/stealth')) return true;
-  // Well-known and MCP
   if (path.startsWith('/.well-known') || path.startsWith('/mcp')) return true;
   return false;
 }
@@ -96,9 +98,8 @@ const spentTxHashes = new Set();
 
 // ─── On-chain USDC verification ────────────────────────────────
 async function verifyOnChainPayment(txHash, requiredAmountUsdc) {
-  if (!HIVE_PAYMENT_ADDRESS || HIVE_PAYMENT_ADDRESS === '0x0000000000000000000000000000000000000000') {
-    return { valid: false, reason: 'Payment address not configured' };
-  }
+  const treasuryLower = getPaymentAddress().toLowerCase();
+  const usdcLower = USDC_CONTRACT.toLowerCase();
   try {
     const receiptRes = await fetch(BASE_RPC_URL, {
       method: 'POST',
@@ -109,10 +110,10 @@ async function verifyOnChainPayment(txHash, requiredAmountUsdc) {
     const { result: receipt } = await receiptRes.json();
     if (!receipt || receipt.status !== '0x1') return { valid: false, reason: 'Transaction not found or failed on Base L2' };
     for (const log of receipt.logs) {
-      if (log.address.toLowerCase() !== USDC_CONTRACT.toLowerCase()) continue;
+      if (log.address.toLowerCase() !== usdcLower) continue;
       if (log.topics[0] !== TRANSFER_TOPIC) continue;
       const recipient = '0x' + log.topics[2].slice(26).toLowerCase();
-      if (recipient !== HIVE_PAYMENT_ADDRESS) continue;
+      if (recipient !== treasuryLower) continue;
       const amountUsdc = parseInt(log.data, 16) / 1_000_000;
       if (amountUsdc >= requiredAmountUsdc) {
         spentTxHashes.add(txHash);
@@ -158,12 +159,21 @@ function x402Middleware(req, res, next) {
     return;
   }
 
+  // Resolve canonical EIP-55 address fresh per-request — fail-closed if env is bad.
+  let payTo;
+  try {
+    payTo = getPaymentAddress();
+  } catch (e) {
+    console.error('[x402] Treasury resolution failed:', e.message);
+    return res.status(503).json({ success: false, error: 'Service treasury unconfigured', code: 'TREASURY_UNCONFIGURED' });
+  }
+
   res.set({
     'X-Payment-Amount': fee.amount.toString(),
     'X-Payment-Currency': 'USDC',
     'X-Payment-Network': 'base',
     'X-Payment-Chain-Id': BASE_CHAIN_ID.toString(),
-    'X-Payment-Address': HIVE_PAYMENT_ADDRESS,
+    'X-Payment-Address': payTo,
     'X-Payment-Model': fee.model,
   });
 
@@ -178,13 +188,13 @@ function x402Middleware(req, res, next) {
       currency: 'USDC',
       network: 'base',
       chain_id: BASE_CHAIN_ID,
-      recipient: HIVE_PAYMENT_ADDRESS,
+      recipient: payTo,
       usdc_contract: USDC_CONTRACT,
       model: fee.model,
       label: fee.label,
     },
     how_to_pay: {
-      step_1: `Send ${fee.amount} USDC to ${HIVE_PAYMENT_ADDRESS} on Base (chain ID ${BASE_CHAIN_ID})`,
+      step_1: `Send ${fee.amount} USDC to ${payTo} on Base (chain ID ${BASE_CHAIN_ID})`,
       step_2: 'Include the transaction hash in the X-Payment-Hash header',
       step_3: 'Retry this request — payment is verified on-chain automatically',
     },
@@ -198,7 +208,7 @@ function x402Middleware(req, res, next) {
       settlement_attestation: '$0.01/tx — POST /v1/bank/settle',
     },
     doctrine: 'HiveBank is a treasury attestation + routing layer. Coinbase/Anchorage/Fireblocks hold the keys. HiveBank attests policy, tracks float, routes yield. Merchant retains custody.',
-    treasury: '0x15184bf50b3d3f52b60434f8942b7d52f2eb436e',
+    treasury: payTo,
     brand: '#C08D23',
   });
 }
