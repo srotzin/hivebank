@@ -6,6 +6,7 @@
 
 const express = require('express');
 const router  = express.Router();
+const providers = require('../services/compliance-providers');
 
 // ─── GET /v1/bank/compliance/eu-ai-act ──────────────────────────────────────
 router.get('/eu-ai-act', (req, res) => {
@@ -60,6 +61,26 @@ router.get('/eu-ai-act', (req, res) => {
       'Conformity assessment for high-risk use cases',
     ],
     next_steps: 'Contact Steve Rotzin at srotzin@me.com for enterprise EU AI Act compliance package',
+  });
+});
+
+// ─── GET /v1/bank/compliance/providers ──────────────────────────────
+// Public, read-only. Returns which compliance providers (TRM, Blockaid,
+// Forta, OpenSanctions) are LIVE vs KEY PENDING. Used by thehiveryiq.com
+// medals to flip status the moment a key is dropped into Render env.
+router.get('/providers', async (req, res) => {
+  const live = providers.isLive();
+  const opensanctions_live = !!process.env.OPENSANCTIONS_API_KEY;
+  return res.json({
+    treasury: process.env.TREASURY_ADDRESS || '0x15184Bf50B3d3F52b60434f8942b7D52F2eB436E',
+    chain: 'base',
+    providers: {
+      trm_labs:       { status: live.trm_labs       ? 'live' : 'key_pending', integration: 'screening API + monitoring',  url: 'https://www.trmlabs.com/products/screening' },
+      blockaid:       { status: live.blockaid       ? 'live' : 'key_pending', integration: 'pre-tx scan + threat intel',   url: 'https://docs.blockaid.io/' },
+      forta_network:  { status: live.forta_network  ? 'live' : 'key_pending', integration: 'decentralized detection bots', url: 'https://docs.forta.network/' },
+      opensanctions:  { status: opensanctions_live  ? 'live' : 'key_pending', integration: 'OFAC + EU FSF + UN consolidated screen via hive-mcp-audit-readiness', url: 'https://www.opensanctions.org/' },
+    },
+    notes: 'A provider flips to live the moment its API key is set in env. No code change required.',
   });
 });
 
