@@ -72,6 +72,12 @@ const crypto   = require('crypto');
 const db       = require('../services/db');
 const vault    = require('../services/vault');
 const { sendUSDC, checkUSDCBalance } = require('../services/usdc-transfer');
+const hivedna  = require('../services/hivedna-receipt');
+let outboundGuard = null;
+try { outboundGuard = require('../services/outbound-guard'); } catch (_) { /* optional */ }
+
+// Eager-init the HiveDNA signer so /info exposes verifier_pk_b64u immediately.
+hivedna.ensureSigner().catch(e => console.error('[HiveWallet] hivedna init:', e.message));
 
 // Leaked-key purge 2026-04-25: lazy read, fail closed if env missing.
 const { getInternalKey } = require('../lib/internal-key');
@@ -169,7 +175,14 @@ router.get('/info', (req, res) => {
   res.json({
     product: 'HiveWallet',
     tagline: 'The first wallet where the agent IS the account holder.',
-    version: '1.0.0',
+    version: '1.1.0',
+    hivedna: {
+      enabled: true,
+      proofs: ['SHOD', 'SPECTRAL_ZK', 'CTEF'],
+      verifier_pk_b64u: hivedna.verifierPkB64u(),
+      verify_endpoint: '/v1/wallet/verify/:receipt_id',
+      chain_endpoint:  '/v1/wallet/:did/chain',
+    },
     what_makes_it_different: [
       'Identity IS the wallet — your DID is your account number',
       'Non-custodial by architecture — Hive never holds your funds',
@@ -268,6 +281,39 @@ router.post('/create', async (req, res) => {
 });
 
 // ── GET /:did — wallet state ──────────────────────────────────────────────────
+
+// ── GET /verify/:receipt_id — PUBLIC. Verify a HiveDNA receipt. ──────────────
+router.get('/verify/:receipt_id', async (req, res) => {
+  try {
+    const { receipt_id } = req.params;
+    if (!/^rcpt_[a-z0-9]+$/i.test(receipt_id)) {
+      return res.status(400).json({ error: 'invalid receipt_id format' });
+    }
+    const result = await hivedna.verifyReceipt(receipt_id);
+    if (!result.found) {
+      return res.status(404).json({ found: false, receipt_id, error: 'receipt not found' });
+    }
+    res.json(result);
+  } catch (e) {
+    console.error('[HiveWallet] verify:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── GET /:did/chain — PUBLIC. CTEF chain integrity for a wallet DID. ─────────
+router.get('/:did/chain', async (req, res) => {
+  try {
+    const { did } = req.params;
+    if (!did || did === 'info' || did === 'verify' || did === 'create') {
+      return res.status(400).json({ error: 'did required' });
+    }
+    const result = await hivedna.chainIntegrity(did);
+    res.json(result);
+  } catch (e) {
+    console.error('[HiveWallet] chain:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
 
 router.get('/:did', requireAuth, async (req, res) => {
   try {
@@ -467,6 +513,28 @@ router.post('/:did/send', requireAuth, async (req, res) => {
       WHERE did = $2
     `, [amount_usdc, did]);
 
+    // HiveDNA: mint a 3-proof receipt for this settled transfer.
+    let hivednaReceipt = null;
+    try {
+      const recentRing = outboundGuard?.getRecentRing
+        ? outboundGuard.getRecentRing()
+        : [];
+      hivednaReceipt = await hivedna.mintReceipt({
+        from_did: did,
+        to_did: to_did || null,
+        to_address: to_address || null,
+        amount_usdc,
+        rail,
+        tx_id: tid,
+        on_chain: onChainResult,
+        spectral_ticket_b64u: req.get('x-spectral-zk-ticket') || null,
+        recent_ring: recentRing,
+      });
+    } catch (e) {
+      console.error('[HiveWallet] hivedna mint failed:', e.message);
+      hivednaReceipt = { error: e.message };
+    }
+
     res.json({
       tx_id: tid,
       status: 'settled',
@@ -479,10 +547,18 @@ router.post('/:did/send', requireAuth, async (req, res) => {
       rail,
       cloazk_cert: cert,
       on_chain: onChainResult,
+      hivedna: hivednaReceipt && !hivednaReceipt.error ? {
+        receipt_id: hivednaReceipt.receipt_id,
+        hivedna_score: hivednaReceipt.hivedna_score,
+        proofs: hivednaReceipt.proofs,
+        signature: hivednaReceipt.signature,
+        verifier_pk_b64u: hivednaReceipt.verifier_pk_b64u,
+        verify_url: `/v1/wallet/verify/${hivednaReceipt.receipt_id}`,
+      } : { error: hivednaReceipt?.error || 'unavailable' },
       memo: memo || null,
       intent_ref: intent_ref || null,
       balance_after: parseFloat(withdrawal.balance_after || 0),
-      message: `Sent $${amount_usdc} via ${rail}. CLOAzK cert attached.`,
+      message: `Sent $${amount_usdc} via ${rail}. CLOAzK cert + HiveDNA receipt attached.`,
     });
   } catch (e) {
     console.error('[HiveWallet] send:', e);
