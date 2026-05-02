@@ -1,0 +1,25 @@
+## OSV-Scanner ignore list — hivebank
+##
+## Each entry MUST justify why the listed vulnerability cannot be exploited
+## in this codebase. The Hive cannon: "we don't ship unless we know the
+## best architect at Google or Circle or Tether can't shoot a hole in it."
+## So every ignore must survive that scrutiny.
+
+[[IgnoredVulns]]
+id = "CVE-2025-14505"
+# Also tracked as GHSA-848j-6mx2-7j84.
+#
+# Pulled in transitively by secp256k1@5.0.1 -> elliptic@^6.5.7. As of this
+# writing the upstream `elliptic` advisory states the issue affects ALL
+# released versions (<= 6.6.1) and no fixed version is available. We cannot
+# pin a clean upstream.
+#
+# Hivebank does NOT call `elliptic` or `secp256k1` directly. The dependency
+# is dragged in by the @coinbase/coinbase-sdk transitive graph. All ECDSA
+# signing for treasury operations is performed via @noble/ed25519 +
+# @noble/hashes (Ed25519, not secp256k1) and via ethers.js for any
+# secp256k1 work — ethers ships its own audited secp256k1 implementation
+# and does not delegate to the `elliptic` package.
+#
+# We will lift this ignore the moment elliptic ships a fixed release.
+# Tracked: hivebank-security-advisories #elliptic-cve-2025-14505

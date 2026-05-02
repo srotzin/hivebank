@@ -1,7 +1,7 @@
 {
   "name": "hivebank",
   "version": "1.0.0",
-  "description": "HiveBank — Agent Treasury Protocol (Platform #10) for the Hive Civilization",
+  "description": "HiveBank \u2014 Agent Treasury Protocol (Platform #10) for the Hive Civilization",
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js"
@@ -11,7 +11,7 @@
     "cors": "^2.8.5",
     "express": "^4.21.0",
     "pg": "^8.13.1",
-    "uuid": "^10.0.0",
+    "uuid": "^14.0.0",
     "ethers": "^6.13.0",
     "@noble/ed25519": "^2.1.0",
     "@noble/hashes": "^1.4.0"
