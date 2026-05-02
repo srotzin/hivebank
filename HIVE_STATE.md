@@ -2,7 +2,7 @@
 
 Single source of truth for what's actually live, what's broken, what's open, and how much money the treasury holds. Updated whenever state changes — read it first before assuming anything works.
 
-Brand: gold `#C08D23`. Voice: Bloomberg/Stripe. No superlatives. Real rails only.
+Brand: gold `#FFB800` (popping yellow-gold matched to Hive-Ball orb logo; was `#C08D23`). Voice: Bloomberg/Stripe. No superlatives. Real rails only.
 
 ---
 
@@ -22,11 +22,15 @@ Brand: gold `#C08D23`. Voice: Bloomberg/Stripe. No superlatives. Real rails only
 | Snyk (dev-first vulnerability scanning) | LIVE | Snyk GitHub App installed on srotzin org → all repositories. Free tier. Scans dependencies, code, containers. |
 | Socket Security (supply-chain protection) | LIVE | Socket GitHub App installed on srotzin org → all repositories. Workspace = `srotzin`. Most relevant: hive-rosetta on npm + PyPI. |
 | FOSSA (license compliance + SBOM) | LIVE | FOSSA GitHub App installed on srotzin org → all repositories. Free tier. |
+| OpenSSF Scorecard | LIVE | `.github/workflows/scorecard.yml` deployed to flagship 12 (hive-rosetta, hivebank, hive-mcp-audit-readiness, hive-mcp-{exchange, swap, vault, evaluator, trade, depin, compute-grid, gateway, identity}). All 12 runs green. SARIF uploaded to code-scanning. Weekly cron Mon 06:00 UTC. |
+| OSV-Scanner (Google) | LIVE | `.github/workflows/osv-scanner.yml` deployed to flagship 12. 12/12 green after first findings on hivebank were closed: uuid bumped 10→14, CVE-2025-14505 elliptic@6.6.1 documented as transitive-only ignore in `osv-scanner.toml` (no upstream fix yet; ethers ships its own @noble/curves/secp256k1, hivebank does not call elliptic directly). |
+| StepSecurity Harden-Runner | LIVE | First step in every Scorecard workflow on flagship 12. Egress-policy:audit. |
 | TRM Labs / Blockaid / Forta provider stubs | LIVE | `compliance-providers.js` + `GET /v1/bank/compliance/providers` status endpoint. Each provider auto-flips LIVE on env-var key paste. |
 | OpenSanctions integration | LIVE | hive-mcp-audit-readiness `audit_sanctions_screen` MCP tool — calls `https://api.opensanctions.org/match/sanctions`. Flips fully live with `OPENSANCTIONS_API_KEY` env var. |
 | Live USDC treasury ticker on thehiveryiq.com | LIVE | `#hive-live-bar` — `eth_call balanceOf(treasury)` to Base, 30s refresh, 3-RPC fallback (mainnet.base.org / publicnode / base-rpc.publicnode). |
 | EU AI Act countdown clock | LIVE | Aug 2 2026 enforcement deadline, 1-second tick on homepage hero. |
 | Third primary CTA — "Calculate your EU AI Act exposure" | LIVE | Routes to `/audit-readiness/assess`. |
+| thehiveryiq.com USA Today redesign | LIVE | Hive-Ball logo upper-left, 4-cell ticker strip, twin yellow-gold counters (countdown + €15M exposure) hovering over inline SVG Europe map with 5 compliance pins (Brussels=EU AI Act, Frankfurt=MiCA·DORA, Paris=GDPR, Dublin=DSA·DMA, Madrid=Sanctions), bee video shrunk 50% to right-rail, single 5-up medal grid of 32 tiles with real Simple Icons brand SVGs. Mobile pill clipping fixed. Site commits `20b48f0` + `94f79c8`. |
 | thehiveryiq.com email — inbound | LIVE | Cloudflare Email Routing. `sales@`, `support@`, `steve@thehiveryiq.com` → `srotzin@me.com`. |
 | thehiveryiq.com email — outbound | LIVE | Resend SMTP relay, DKIM verified, SPF clean, DMARC monitoring. Used today to send Artemis + Token Terminal coverage requests. |
 
@@ -39,6 +43,8 @@ Brand: gold `#C08D23`. Voice: Bloomberg/Stripe. No superlatives. Real rails only
 | Artemis Analytics coverage page | OUTREACH SENT | Email sent 2026-05-01 to `team@artemis.xyz` from `steve@thehiveryiq.com` (Resend id `68ce381a`). Awaiting reply. Medal flips on confirmation. |
 | Token Terminal listing | OUTREACH SENT | Email sent 2026-05-01 to `team@tokenterminal.com` (Resend id `dae2587d`). Awaiting reply. Medal flips on confirmation. |
 | Dune Analytics public dashboard | QUERIES READY | 3 SQL queries written (`x402_tx_volume`, `surface_activity`, `treasury_movements`). Owner action: paste into Dune → publish → link from medal. |
+| Dependabot org-level enable | PENDING | Workflows-style Scorecard + OSV already cover dependency CVEs. Dependabot adds auto-PRs but requires org-level toggle in GitHub UI. Medal stays PENDING until enabled. |
+| Better Stack public status page | PENDING SIGNUP | Owner action: signup brief drafted in `launch_artifacts/better_stack_signup.md`. After signup, wire `status.thehiveryiq.com` and add monitors for hivecompute LLM endpoint, hivemorph health, hivebank, settler API, site. |
 | TRM Labs API key | OUTREACH IN FLIGHT | Steve reached out to TRM directly; awaiting paste of contact thread + API key. Stub already wired — paste = LIVE. |
 | Blockaid API key | PENDING | After TRM. |
 | Forta Network API key | PENDING | After Blockaid. |
