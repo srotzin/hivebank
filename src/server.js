@@ -898,3 +898,74 @@ start().catch((err) => {
 });
 
 module.exports = app;
+
+// ─── /llms.txt — agent discovery (llmstxt.org convention) ────────────────────
+app.get('/llms.txt', (req, res) => {
+  res.type('text/plain; charset=utf-8').send(`# HiveBank
+> Autonomous-agent banking layer for the Hive Civilization federation — USDC vaults, streaming micropayments, and Steve Prospector admissions.
+
+## What this is
+HiveBank is the on-chain treasury and credit rail for the Hive Civilization agent economy.
+It handles USDC yield vaults, streaming micropayment budgets, credit scoring,
+cashback, bonds, referrals, and the Steve Prospector admission + Bonanza claim flow.
+All settled in USDC (Base) or USDT (Base) to the canonical Hive treasury.
+
+## Hive Civilization context
+HiveBank is one node in the Hive Civilization federation — a fleet of agent-facing
+microservices designed to be fully autonomous-agent navigable.
+Sister services share the same x402 / MPP payment rails, the same treasury address,
+and the same "Hive Civilization gold #FFB800" brand.
+
+## Auth model
+- Free endpoints: GET /health, GET /openapi.json, GET /llms.txt, GET /, GET /robots.txt
+- x402 paywalled endpoints: all /v1/bank/* routes (vaults, budgets, streams, credit, bonds, cashback, referrals)
+- x402 settles to treasury 0x15184Bf50B3d3F52b60434f8942b7D52F2eB436E on Base in USDC or USDT
+- MPP rail also accepted (Tempo USDCe on Arbitrum)
+- Solana rail: USDC to the canonical Solana treasury address (see /.well-known/hive-payments.json)
+
+## Counter-offer / barter floor
+The 402 response envelope contains \`amount_min_usd\` — the floor price for that endpoint.
+Submit any value >= \`amount_min_usd\`. There is no ceiling enforced by the server.
+Example header pattern: \`X-Payment: amount=0.01,currency=USDC,chain=base,to=0x15184Bf50B3d3F52b60434f8942b7D52F2eB436E\`
+
+## Steve Prospector flow
+1. GET /health — verify service is live
+2. POST /v1/gate/onboard (via hivegate.onrender.com) — register a DID, receive an auth token
+3. POST /v1/bank/vault/deposit — fund your USDC vault
+4. GET /v1/bank/stats or GET /v1/admin/stats — inspect ledger
+5. POST /v1/bank/send (authenticated) — send USDC to another DID
+Steve Prospector internal stats: GET /v1/bank/prospector/_stats (requires internal key)
+
+## Bonanza claim flow
+1. Earn cashback: GET /v1/bank/cashback/balance/:did — check pending USDC rewards
+2. GET /v1/bank/cashback/leaderboard — see top earners
+3. POST /v1/bank/cashback/claim (authenticated) — sweep USDC payout to your wallet
+
+## Key endpoints
+- GET  /v1/bank/vault/balance       — vault USDC balance (auth required)
+- POST /v1/bank/vault/deposit       — deposit USDC (auth required)
+- POST /v1/bank/vault/withdraw      — withdraw USDC (auth required)
+- GET  /v1/bank/budget/status       — streaming budget status (auth required)
+- POST /v1/bank/stream/open         — open a micropayment stream (auth required)
+- GET  /v1/bank/stats               — ledger aggregate stats (auth required)
+- GET  /v1/bank/referral/leaderboard — public referral leaderboard
+- GET  /v1/bank/bonds/rates         — current bond APY rates
+- GET  /v1/bank/settlement-rails    — which rails are live (USDC/USDT/MPP)
+- GET  /v1/bank/prospector/_stats   — Steve Prospector admission stats (internal key)
+
+## Sister services
+- HiveGate  (auth + onboarding): https://hivegate.onrender.com/llms.txt
+- HiveOrigin (routing + egress):  https://hiveorigin.onrender.com/llms.txt
+- HiveMorph (morphing + attest):  https://hivemorph.onrender.com/llms.txt
+- HiveTrust (KYA + trust scores): https://hivetrust.onrender.com/llms.txt
+- HiveLens  (observability):      https://hivelens.onrender.com/llms.txt
+- HiveAttest MCP:                 https://hive-mcp-attest.onrender.com/llms.txt
+- HiveMining MCP:                 https://hive-mcp-mining.onrender.com/llms.txt
+
+## License + brand
+License: MIT
+Brand color: gold #FFB800
+Treasury: 0x15184Bf50B3d3F52b60434f8942b7D52F2eB436E (Base USDC/USDT)
+Last updated: 2026-05-02
+`);
+});
