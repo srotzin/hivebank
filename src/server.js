@@ -3,6 +3,7 @@ const cors = require('cors');
 const authMiddleware = require('./middleware/auth');
 const { x402Middleware } = require('./middleware/x402');
 const { mppMiddleware } = require('./middleware/mpp');
+const { smashProvMiddleware, getPubkeyInfo: getProvPubkeyInfo, verifyProvSig } = require('./lib/prov');
 const { getTreasuryAddress } = require('./lib/treasury');
 const { canonicalAddress } = require('./lib/canonical');
 
@@ -94,6 +95,21 @@ const PORT = process.env.PORT || 3001;
 
 app.use(cors());
 app.use(express.json());
+
+// ── smash.prov middleware (BEFORE paywall) ────────────────────────────────────
+app.use(smashProvMiddleware);
+
+// ── /v1/prov routes (free, never paywalled) ───────────────────────────────────
+app.get('/v1/prov/pubkey', async (_req, res) => {
+  try { res.json(await getProvPubkeyInfo()); } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.post('/v1/prov/verify', async (req, res) => {
+  try {
+    const { method, path: p, body_b64u = '', ts, sig_b64u } = req.body || {};
+    if (!method || !p || ts == null || !sig_b64u) return res.status(400).json({ error: 'missing fields' });
+    res.json(await verifyProvSig({ method, path: p, body_b64u, ts, sig_b64u }));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 
 // Wrap any res.status(N).json() where N >= 400 with the recruitment envelope.
 // Idempotent — already-wrapped payloads pass through unchanged.

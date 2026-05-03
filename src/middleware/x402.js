@@ -46,8 +46,9 @@ const FREE_PREFIXES_GET = [
   '/v1/bonds/rates', '/v1/bonds/stats', '/v1/cashback/tiers',
   '/v1/cashback/leaderboard', '/v1/bank/referral/leaderboard',
   '/v1/bank/referral/card', '/v1/grid/rails', '/v1/grid/stats',
-  '/.well-known', '/mcp',
+  '/.well-known', '/mcp', '/v1/prov/',
 ];
+const FREE_PREFIXES_ALL = ['/v1/prov/'];  // free for any method (GET + POST)
 
 // ─── Fee table ─────────────────────────────────────────────────
 const FEE_TABLE = {
@@ -91,6 +92,7 @@ function isFree(path, method) {
   if (path.startsWith('/v1/bank/prospector')) return true;  // Prospector's Bonanza — auth handled per-endpoint
   if (path.startsWith('/v1/pay') || path.startsWith('/v1/bank/settle/stealth')) return true;
   if (path.startsWith('/.well-known') || path.startsWith('/mcp')) return true;
+  if (path.startsWith('/v1/prov/')) return true;
   return false;
 }
 
