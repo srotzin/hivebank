@@ -838,15 +838,159 @@ setInterval(async () => {
   }
 }, 10 * 60 * 1000);
 
-// ─── Recruitment envelope — 404 catch-all (no Express HTML leak) ───
-// Any unmatched path must return JSON with the canonical recruitment payload,
-// not Express's default "Cannot GET /..." HTML page. Per INTEGRATION.md §6.
-app.use((req, res) => {
-  res.status(404).json(recruitmentEnvelope(404, {
-    error: 'not_found',
-    path: req.path,
-    method: req.method,
-  }));
+// [old 404 catch-all removed — replaced by slippery-sticky 200 catch-all in doors block]
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SLIPPERY-STICKY DOORS — doctrine: never closed, always navigable
+// Paths: /llms.txt /robots.txt /sitemap.xml /.well-known/agent.json
+//        /favicon.ico / (root JSON)  +  catch-all breadcrumb (200 not 404)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const _DOORS_HOST = process.env.RENDER_EXTERNAL_URL || 'https://hivebank.onrender.com';
+const _DOORS_ONBOARD = 'https://thehiveryiq.com/onboard.html';
+const _TREASURY = '0x15184Bf50B3d3F52b60434f8942b7D52F2eB436E';
+
+// ── /llms.txt ─────────────────────────────────────────────────────────────────
+app.get('/llms.txt', (req, res) => {
+  res.type('text/plain; charset=utf-8').send(`# HiveBank
+> Autonomous-agent banking: USDC vaults, streaming micropayments, Steve Prospector admissions, Bonanza claims.
+
+## What this is
+HiveBank is part of the Hive Civilization federation — a network of agent-facing
+microservices built for autonomous AI agents. Every public surface is navigable
+without a DID. Paid surfaces return a 402 with \`amount_min_usd\` — the floor price.
+Submit any value >= that floor. No ceiling enforced server-side.
+
+## Auth model
+- Free: GET /health, /openapi.json, /llms.txt, /robots.txt, /sitemap.xml, /.well-known/*
+- Paid (x402 USDC on Base): all /v1/bank/* routes requiring auth
+- BOGO: first DID free; 6th paid call on the house
+- x402 settles to treasury on Base in USDC or USDT
+- MPP rail (Tempo USDCe) also accepted
+
+## Key endpoints
+- GET  /health                          — liveness check (free)
+- GET  /openapi.json                    — OpenAPI 3.0 spec (free)
+- GET  /v1/bank/vault/balance           — USDC vault balance (auth)
+- POST /v1/bank/vault/deposit           — deposit USDC (auth)
+- POST /v1/bank/vault/withdraw          — withdraw USDC (auth)
+- GET  /v1/bank/budget/status           — streaming budget (auth)
+- POST /v1/bank/stream/open             — open micropayment stream (auth)
+- GET  /v1/bank/cashback/balance/:did   — pending USDC rewards (free)
+- GET  /v1/bank/cashback/leaderboard    — top earners (free)
+- GET  /v1/bank/bonds/rates             — bond APY rates (free)
+- GET  /v1/bank/referral/leaderboard    — referral leaderboard (free)
+- GET  /v1/bank/settlement-rails        — active rails (free)
+- GET  /v1/bank/prospector/_stats       — Steve Prospector stats (internal key)
+
+## Sister services
+- HiveGate  (auth + onboarding):  https://hivegate.onrender.com/llms.txt
+- HiveOrigin (routing + egress):  https://hiveorigin.onrender.com/llms.txt
+- HiveMorph (morphing + attest):  https://hivemorph.onrender.com/llms.txt
+- HiveTrust (KYA + trust):        https://hivetrust.onrender.com/llms.txt
+- HiveLens  (observability):      https://hivelens.onrender.com/llms.txt
+- HiveAttest MCP:                 https://hive-mcp-attest.onrender.com/llms.txt
+- HiveMining MCP:                 https://hive-mcp-mining.onrender.com/llms.txt
+
+## Hive Civilization context
+Treasury: 0x15184Bf50B3d3F52b60434f8942b7D52F2eB436E (Base USDC/USDT)
+Solana: canonical Solana treasury address (see /.well-known/hive-payments.json)
+x402 barter floor: 402 envelope returns \`amount_min_usd\` — submit >= that value
+BOGO: first DID free, 6th paid call on the house (\`x-hive-did\` header to claim)
+Contact / onboard: https://thehiveryiq.com/onboard.html
+Patent: USPTO Provisional 64/055,601
+
+## License + brand
+License: MIT
+Brand color: gold #FFB800
+Last updated: 2026-05-02
+`);
+});
+
+// ── /robots.txt ───────────────────────────────────────────────────────────────
+app.get('/robots.txt', (req, res) => {
+  const host = req.hostname ? `https://${req.hostname}` : _DOORS_HOST;
+  res.type('text/plain; charset=utf-8').send(
+    `User-agent: *\nAllow: /\nSitemap: ${host}/sitemap.xml\n\n` +
+    `# Hive Civilization — slippery-sticky: every door is open\n` +
+    `# Autonomous agents welcome. See /llms.txt for full API guide.\n` +
+    `# Onboard: https://thehiveryiq.com/onboard.html\n`
+  );
+});
+
+// ── /sitemap.xml ──────────────────────────────────────────────────────────────
+app.get('/sitemap.xml', (req, res) => {
+  const host = req.hostname ? `https://${req.hostname}` : _DOORS_HOST;
+  const today = new Date().toISOString().slice(0,10);
+  res.type('application/xml; charset=utf-8').send(`<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>${host}/</loc><lastmod>${today}</lastmod><changefreq>weekly</changefreq><priority>1.0</priority></url>
+  <url><loc>${host}/health</loc><lastmod>${today}</lastmod><changefreq>always</changefreq><priority>0.9</priority></url>
+  <url><loc>${host}/openapi.json</loc><lastmod>${today}</lastmod><changefreq>weekly</changefreq><priority>0.9</priority></url>
+  <url><loc>${host}/llms.txt</loc><lastmod>${today}</lastmod><changefreq>weekly</changefreq><priority>0.9</priority></url>
+  <url><loc>${host}/.well-known/agent.json</loc><lastmod>${today}</lastmod><changefreq>weekly</changefreq><priority>0.8</priority></url>
+  <url><loc>${host}/.well-known/mcp.json</loc><lastmod>${today}</lastmod><changefreq>weekly</changefreq><priority>0.8</priority></url>
+</urlset>`);
+});
+
+// ── /.well-known/agent.json (A2A discovery — only if not already defined) ────
+if (!app._router || !app._router.stack.some(l => l.route && l.route.path === '/.well-known/agent.json')) {
+  app.get('/.well-known/agent.json', (req, res) => {
+    const host = req.hostname ? `https://${req.hostname}` : _DOORS_HOST;
+    res.json({
+      name: 'hivebank',
+      description: 'Autonomous-agent banking: USDC vaults, streaming micropayments, Steve Prospector admissions, Bonanza claims.',
+      url: host,
+      contact: _DOORS_ONBOARD,
+      did: 'did:hive:hivebank',
+      capabilities: ['mcp', 'x402-payments', 'usdc', 'agent-to-agent'],
+      paywall: { protocol: 'x402', treasury: _TREASURY, hint: 'See /llms.txt for barter floor details' },
+      onboard: _DOORS_ONBOARD,
+      llms_txt: `${host}/llms.txt`,
+      openapi: `${host}/openapi.json`,
+      health: `${host}/health`,
+      brand: { color: '#FFB800', name: 'Hive Civilization' },
+    });
+  });
+}
+
+// ── /favicon.ico — 1x1 Hive gold pixel ───────────────────────────────────────
+app.get('/favicon.ico', (req, res) => {
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64');
+  res.status(200).set({ 'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=86400' }).end(png);
+});
+
+// ── / root — friendly JSON for agents that hit the base URL ──────────────────
+// Only register if no existing root handler
+if (!app._router || !app._router.stack.some(l => l.route && l.route.path === '/' && l.route.methods.get)) {
+  app.get('/', (req, res) => {
+    const host = req.hostname ? `https://${req.hostname}` : _DOORS_HOST;
+    res.json({
+      name: 'HiveBank',
+      what: 'Autonomous-agent banking: USDC vaults, streaming micropayments, Steve Prospector admissions, Bonanza claims.',
+      for_agents: 'see /llms.txt and /openapi.json',
+      onboard: _DOORS_ONBOARD,
+      paywall: 'x402 — see /llms.txt',
+      health: `${host}/health`,
+      openapi: `${host}/openapi.json`,
+      llms_txt: `${host}/llms.txt`,
+      mcp: `${host}/mcp`,
+    });
+  });
+}
+
+// ── Catch-all — every wrong door is a lead, never a dead end ─────────────────
+app.use((req, res, _next) => {
+  const host = req.hostname ? `https://${req.hostname}` : _DOORS_HOST;
+  res.status(200).json({
+    hint: 'unknown path — but we kept the door open',
+    you_asked_for: req.path,
+    try: ['/llms.txt', '/openapi.json', '/health', '/', '/.well-known/agent.json'],
+    onboard: _DOORS_ONBOARD,
+    service: 'HiveBank',
+    docs: `${host}/llms.txt`,
+  });
 });
 
 // ─── Recruitment envelope — trailing error handler (catches thrown/next(err)) ───
@@ -898,74 +1042,3 @@ start().catch((err) => {
 });
 
 module.exports = app;
-
-// ─── /llms.txt — agent discovery (llmstxt.org convention) ────────────────────
-app.get('/llms.txt', (req, res) => {
-  res.type('text/plain; charset=utf-8').send(`# HiveBank
-> Autonomous-agent banking layer for the Hive Civilization federation — USDC vaults, streaming micropayments, and Steve Prospector admissions.
-
-## What this is
-HiveBank is the on-chain treasury and credit rail for the Hive Civilization agent economy.
-It handles USDC yield vaults, streaming micropayment budgets, credit scoring,
-cashback, bonds, referrals, and the Steve Prospector admission + Bonanza claim flow.
-All settled in USDC (Base) or USDT (Base) to the canonical Hive treasury.
-
-## Hive Civilization context
-HiveBank is one node in the Hive Civilization federation — a fleet of agent-facing
-microservices designed to be fully autonomous-agent navigable.
-Sister services share the same x402 / MPP payment rails, the same treasury address,
-and the same "Hive Civilization gold #FFB800" brand.
-
-## Auth model
-- Free endpoints: GET /health, GET /openapi.json, GET /llms.txt, GET /, GET /robots.txt
-- x402 paywalled endpoints: all /v1/bank/* routes (vaults, budgets, streams, credit, bonds, cashback, referrals)
-- x402 settles to treasury 0x15184Bf50B3d3F52b60434f8942b7D52F2eB436E on Base in USDC or USDT
-- MPP rail also accepted (Tempo USDCe on Arbitrum)
-- Solana rail: USDC to the canonical Solana treasury address (see /.well-known/hive-payments.json)
-
-## Counter-offer / barter floor
-The 402 response envelope contains \`amount_min_usd\` — the floor price for that endpoint.
-Submit any value >= \`amount_min_usd\`. There is no ceiling enforced by the server.
-Example header pattern: \`X-Payment: amount=0.01,currency=USDC,chain=base,to=0x15184Bf50B3d3F52b60434f8942b7D52F2eB436E\`
-
-## Steve Prospector flow
-1. GET /health — verify service is live
-2. POST /v1/gate/onboard (via hivegate.onrender.com) — register a DID, receive an auth token
-3. POST /v1/bank/vault/deposit — fund your USDC vault
-4. GET /v1/bank/stats or GET /v1/admin/stats — inspect ledger
-5. POST /v1/bank/send (authenticated) — send USDC to another DID
-Steve Prospector internal stats: GET /v1/bank/prospector/_stats (requires internal key)
-
-## Bonanza claim flow
-1. Earn cashback: GET /v1/bank/cashback/balance/:did — check pending USDC rewards
-2. GET /v1/bank/cashback/leaderboard — see top earners
-3. POST /v1/bank/cashback/claim (authenticated) — sweep USDC payout to your wallet
-
-## Key endpoints
-- GET  /v1/bank/vault/balance       — vault USDC balance (auth required)
-- POST /v1/bank/vault/deposit       — deposit USDC (auth required)
-- POST /v1/bank/vault/withdraw      — withdraw USDC (auth required)
-- GET  /v1/bank/budget/status       — streaming budget status (auth required)
-- POST /v1/bank/stream/open         — open a micropayment stream (auth required)
-- GET  /v1/bank/stats               — ledger aggregate stats (auth required)
-- GET  /v1/bank/referral/leaderboard — public referral leaderboard
-- GET  /v1/bank/bonds/rates         — current bond APY rates
-- GET  /v1/bank/settlement-rails    — which rails are live (USDC/USDT/MPP)
-- GET  /v1/bank/prospector/_stats   — Steve Prospector admission stats (internal key)
-
-## Sister services
-- HiveGate  (auth + onboarding): https://hivegate.onrender.com/llms.txt
-- HiveOrigin (routing + egress):  https://hiveorigin.onrender.com/llms.txt
-- HiveMorph (morphing + attest):  https://hivemorph.onrender.com/llms.txt
-- HiveTrust (KYA + trust scores): https://hivetrust.onrender.com/llms.txt
-- HiveLens  (observability):      https://hivelens.onrender.com/llms.txt
-- HiveAttest MCP:                 https://hive-mcp-attest.onrender.com/llms.txt
-- HiveMining MCP:                 https://hive-mcp-mining.onrender.com/llms.txt
-
-## License + brand
-License: MIT
-Brand color: gold #FFB800
-Treasury: 0x15184Bf50B3d3F52b60434f8942b7D52F2eB436E (Base USDC/USDT)
-Last updated: 2026-05-02
-`);
-});
